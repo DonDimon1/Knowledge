@@ -1,0 +1,4 @@
+https://webhamster.ru/mytetrashare/index/mtb0/153158444442sc8l3fdm
+
+В чем разница между файлами конфигурации *.proи *.priфайлами конфигурации qmake?
+https://stackoverflow.com/questions/8358627/qt-pro-vs-pri

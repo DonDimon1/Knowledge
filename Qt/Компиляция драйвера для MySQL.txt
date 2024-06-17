@@ -1,0 +1,96 @@
+﻿Крутой гайд: https://pavelk.ru/mysql-5-5-i-qt-qtcreator-4-8-1-windows-7-x64/?ysclid=lup7mewms7858390836
+
+set PATH=F:\PROG\QT\6.6.3\mingw_64\bin;%PATH%  		(Там, где лежит qmake.exe)
+set PATH=F:\PROG\QT\Tools\mingw1120_64\bin;%PATH% 	(там, где лежит mingw32-make.exe)
+
+Важно! Убедитесь, что в PATH у Вас нет никаких путей до других версий Qt и компиляторов, а то будет куча непонятных ошибок. Можно в консольке ввести echo %PATH% и посмотреть, что сейчас там.
+
+##########
+Для Qt 5.x	(Получилось!!!, работает. На счёт ошибок чтения и ошибки библиотеки sql в гайде написано).
+
+set PATH=C:\QT\Qt5.14.2\5.14.2\mingw73_32\bin;%PATH% (Там, где лежит qmake.exe)
+set PATH=C:\QT\Qt5.14.2\Tools\mingw730_32\bin;%PATH% (там, где лежит mingw32-make.exe)
+
+cd C:\QT\Qt5.14.2\5.14.2\Src\qtbase\src\plugins\sqldrivers\mysql
+qmake.exe -o MakeFile "INCLUDEPATH+=\"C:/Program Files/MySQL/MySQL Connector C 6.1/include\"" "LIBS+=\"C:/Program Files/MySQL/MySQL Connector C 6.1/lib/libmysql.lib\"" "LIBS+=-L\"C:/Program Files/MySQL/MySQL Connector C 6.1/lib"" mysql.pro
+qmake.exe -o MakeFile "INCLUDEPATH+=\"C:/Program Files/MySQL/MySQL Server 5.7/include\"" "LIBS+=\"C:/Program Files/MySQL/MySQL Server 5.7/lib/libmysql.lib\"" "LIBS+=-L\"C:/Program Files/MySQL/MySQL Server 5.7/lib"" mysql.pro
+mingw32-make -f MakeFile.release
+
+
+##########
+Для Qt 6.x
+set PATH=F:/PROG/QT/Tools/CMake_64/bin;%PATH%		(Путь до CMake)
+set PATH=F:/PROG/QT/Tools/Ninja;%PATH%			(Путь до сборщика Ninja)
+
+Собираем:
+cd C:\Program Files\MySQL\MySQL Server 8.0\build-sqldrivers
+ИЛИ
+cd F:\PROG\QT\6.6.3\Src\qtbase\src\plugins\sqldrivers\build-sqldrivers
+
+set toolchain_path=F:/PROG/QT/6.6.3/mingw_64/lib/cmake/Qt6/qt.toolchain.cmake (слеши в другую сторону!)
+
+cmake -G"Ninja" ../ -DMySQL_INCLUDE_DIR="C:/Program Files/MySQL/MySQL Server 8.0/include" -DMySQL_LIBRARY="C:/Program Files/MySQL/MySQL Server 8.0/lib/libmysql.lib" -DCMAKE_TOOLCHAIN_FILE="%toolchain_path%"
+cmake --build .
+
+Если есть проблема со сборкой после последней команды (Например [15/25]): 
+У вас есть пути с пробелами, которые часто проблематичны, как и в этом случае. Установите клиентскую библиотеку MySQL в папку без пробелов. (lib и include по пути без пробелов):
+https://forum.qt.io/topic/110176/build-qmysql-driver-under-windows-10-a-sample-solution-for-qsqldatabase-qmysql-driver-not-loaded/24
+
+
+##########
+Общий случай:
+qt-cmake -G Ninja <qt_installation_path>\Src\qtbase\src\plugins\sqldrivers -DCMAKE_INSTALL_PREFIX=<qt_installation_path>\<platform> -DMySQL_INCLUDE_DIR="C:\mysql-8. 0.22-winx64\include" -DMySQL_LIBRARY="C:\mysql-8.0.22-winx64\lib\libmysql.lib"
+
+Мой случай:
+qt-cmake -G Ninja F:\PROG\QT\6.6.3\Src\qtbase\src\plugins\sqldrivers -DCMAKE_INSTALL_PREFIX="F:\PROG\QT\6.6.3\mingw_64" -DMySQL_INCLUDE_DIR="C:\Program Files\MySQL\MySQL Server 8.0\include" -DMySQL_LIBRARY="C:\Program Files\MySQL\MySQL Server 8.0\lib\libmysql.lib"
+
+
+_________________________________________________________________
+(Дополнительно, это не помогло)
+Видео по сборке старое, но смысл тот же: https://www.youtube.com/watch?v=3CnAxGgvEmo&t=292s 
+
+Или https://runebook.dev/ru/docs/qt/sql-driver (Тоже самое)
+Или нажимаем в QtCreator справка и в поиске вводим: Build MySQL
+Находим пункт: How to Build the QMYSQL Plugin on Windows
+Читаем и выполняем что там написано.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

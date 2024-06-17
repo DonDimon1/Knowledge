@@ -1,0 +1,26 @@
+#include <QtSql/QSqlDatabase> //Для работы с SQL
+или просто : #include <QSqlDatabase>
+
+https://www.youtube.com/watch?v=prMux00gZyE&ab_channel=LearnQT
+
+QT DB без SQL: https://www.youtube.com/watch?v=mcdTfJb5d7c&ab_channel=%D0%9F%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%BD%D1%8B%D0%B9%D0%9A%D0%BE%D1%82 
+
+
+Узнать какие SQL драйвера установлены:
+qDebug() << "Drivers list: " << QSqlDatabase::drivers();
+
+Если ошибка:
+warning unknown: QSqlDatabase: QMYSQL driver not loaded
+warning unknown: QSqlDatabase: available drivers: QMYSQL
+
+То читать гайд в конце: https://pavelk.ru/mysql-5-5-i-qt-qtcreator-4-8-1-windows-7-x64/?ysclid=lup7mewms7858390836
+
+
+Подключение к БД
+QSqlDatabase db = QSqlDatabase::addDatabase("QMYSQL", "mydb"); //Создания объекта соединения
+db.setHostName("127.0.0.1");
+db.setDatabaseName("test");//MySQL57
+db.setUserName("root");
+db.setPassword("EAZzae1234");
+bool ok = db.open(); //Проверка подключения к БД
+qDebug() << ok; //Вывод результата подключения

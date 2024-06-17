@@ -1,0 +1,2 @@
+find_package(Qt6 REQUIRED COMPONENTS Sql) 			# Для базы данных
+target_link_libraries(ComputerAccounting PRIVATE Qt6::Sql)   	# Для базы данных

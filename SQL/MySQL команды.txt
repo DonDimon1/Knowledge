@@ -1,0 +1,320 @@
+http://www.mysql.ru/docs/man/Getting_information.html
+https://trofimovdigital.ru/blog/mysql-command-line
+https://metanit.com/sql/mysql/3.2.php
+
+MySQL 8.0 Command Line Client
+
+Заходим в MySQL 8.0 Command Line Client
+
+Получить информацию об установленной версии MySQL:
+mysql -V
+
+Для подключения к mysql в консоли наберите команду:
+mysql -h you_sql_server -u user_name -p
+h — хост c MySQL. Если подключаемся с локальной машины, параметр можно опустить
+u — имя пользователя MySQL (root или другой пользователь MySQL)
+p — пароль, который будет предложено ввести после нажатия enter
+
+Если не работает консоль mysql:
+mysql -uroot -p
+
+Запросы должны оканчиваться точкой с запятой. Длинные запросы удобно разбивать enter-ом для перехода на новую строку, а после полного написания запроса поставить точку с 
+запятой и выполнить его.
+Для отключения от MySQL нужно написать exit или (в unix-системах) нажать комбинацию клавиш ctrl+с.
+
+#########
+Для вывода всех баз данных на сервере используйте команду show databases:
+SHOW DATABASES;
+
+Выберите нужную базу данных командой use.
+USE db_name;
+
+Показать все таблицы выбранной базы данных в текущей БД.
+SHOW TABLES;
+
+Показать все таблицы базы данных db_name.
+SHOW TABLES FROM db_name;
+
+Показать список столбцов в таблице table_name в текущей БД
+SHOW COLUMNS FROM table_name;
+
+Показать список столбцов в таблице table_name из БД db_name
+SHOW COLUMNS FROM table_name FROM db_name;
+
+Вывести структуру нужной таблицы
+DESCRIBE table_name;
+
+Показать всю информацию из таблицы
+SELECT * FROM table_name;
+
+Показать структуру таблицы, будет выведен sql-запрос на её создание через «CREATE TABLE».
+SHOW CREATE TABLE table_name;
+
+Вывести значения системных переменных.
+SHOW VARIABLES;
+
+Показать список выполняющихся в настоящий момент запросов.
+SHOW PROCESSLIST;
+
+Общая статистика MySQL.
+SHOW STATUS;
+
+Статистика по всем таблицам в базе db_name.
+SHOW TABLE STATUS FROM db_name;
+
+
+
+#########
+Управление базами данных
+
+Создание базы данных из консоли сервера
+$ mysqladmin -u root -p create db_name
+
+Удаление базы данных из консоли сервера
+mysqladmin -u root -p drop db_name
+
+Создание базы данных db_name из консоли MySQL
+CREATE DATABASE db_name COLLATE utf8_general_ci;
+
+Удаление базы данных db_name из консоли MySQL
+DELETE DATABASE db_name;
+
+Замена в поле одной подстроки на другую
+UPDATE table SET field=replace(field,'original string','new string');
+
+
+
+#########
+Работа с пользователями
+
+Вывести список пользователей
+SELECT User,Host FROM mysql.user;
+
+Показать список прав пользователя user
+SHOW GRANTS FOR user_name FROM db_name;
+
+Создать нового пользователя
+CREATE USER 'user'@'host' IDENTIFIED BY'password';
+
+host — здесь имя хоста, доменное имя или ip адрес, с которого пользователь сможет подключаться к серверу, например user@localhost.
+
+Чтобы создаваемый пользователь смог подключаться к серверу MySQL с любого IP адреса или хоста (за исключением localhost), можно использовать символ процента, вот так
+CREATE USER 'user'@'%' IDENTIFIED BY 'password';
+
+Чтобы разрешрешить пользователю подключаться вообще со всех хостов, придётся создать для него две учётные записи.
+CREATE USER 'user'@'%' IDENTIFIED BY 'password';
+CREATE USER 'user'@'localhost' IDENTIFIED BY 'password';
+
+Добавить указанные привилегии для таблиц БД db_name пользователю user@localhost
+GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,DROP,ALTER,INDEX 
+ON db_name.* TO 'user'@'localhost';
+
+Чтобы изменить права пользователю, иногда удобно сначала сбросить все права
+REVOKE ALL PRIVILEGES ON *.* FROM 'user'@'localhost';
+
+А затем установить нужные с помощью GRANT, как было показано выше.
+
+Добавить все привилегии для таблиц БД db_name пользователю user@localhost
+GRANT ALL PRIVILEGES ON db_name.* TO 'user'@'localhost';
+
+Удаление привилегий пользователя user@localhost для БД db_name:
+REVOKEALLON db_name.* FROM 'user'@'localhost';
+
+Сделать из пользователя суперпользователя и дать полный доступ ко всем БД на сервере
+GRANT ALL ON *.* TO 'user'@'localhost';
+
+Удалить пользователя user@localhost
+DROP USER user@localhost;
+
+Перезагрузить привилегии
+FLUSH PRIVILEGES;
+
+Изменить пароль пользователя в консоли MySQL
+SET PASSWORD FOR 'user'@'localhost' = PASSWORD('new_password');
+FLUSH PRIVILEGES;
+
+или так
+UPDATE mysql.user SET Password=PASSWORD('new_password') WHERE User='user_name';
+FLUSH PRIVILEGES;
+service mysqld restart;
+
+Установить пароль для пользователя user в консоли сервера.
+$ mysqladmin -uuser_name password'password'
+
+
+
+#########
+Исправление и оптимизация баз данных в MySQL
+
+Чтобы исправить ошибки в поврежденной таблице, в консоли MySQL выполните:
+> REPAIR TABLE table_name;
+
+Если же в БД много поврежденных таблиц можно воспользоваться командой mysqlcheck.
+
+Проверить db_name на ошибки.
+$ mysqlcheck -p db_name
+
+Восстановление и оптимизация всех БД
+$ mysqlcheck -Aor -p
+
+Аргументы:
+
+p – использовать пароль
+-A, —all-databases – проверять все базы данных
+-o, —optimize – оптимизировать
+-r, —repair – восстанавливать повреждённые
+—auto-repair – автоматическое восстановление
+
+
+
+
+#########
+Бэкап MySQL из командной строки
+
+Экспорт базы MySQL
+$ mysqldump -u username -p db_name > dump.sql
+
+Дамп нескольких баз
+$ mysqldump -u username -p -B db_name1 db_name2 > dump.sql
+
+Дамп всех баз на сервере
+$ mysqldump -u username -p -A > dump.sql
+
+Дамп только структуры базы, без данных
+$ mysqldump -u username -p --no-data db_name > database.sql
+
+Дамп структуры одной таблицы mysql, без данных:
+$ mysqldump -u username -p -h host db_name table_name --no-data > /path/dump.sql
+
+Развернуть базу данных MySQL из дампа
+$ mysql -u username -p db_name < dump_to_restore.sql
+
+
+
+#########
+Таблицы 
+https://selectel.ru/blog/tutorials/how-to-create-tables-in-mysql/
+
+Создание таблицы:
+CREATE TABLE название_таблицы
+(название_столбца1 тип_данных атрибуты_столбца1, 
+ название_столбца2 тип_данных атрибуты_столбца2,
+ ................................................
+ название_столбцаN тип_данных атрибуты_столбцаN,
+ атрибуты_уровня_таблицы
+)
+
+Типы данных столбцов:
+Числовые:
+INT — целочисленные значения от ?2147483648 до 2147483647, 4 байта.
+DECIMAL — хранит числа с заданной точностью. Использует два параметра — максимальное количество цифр всего числа (precision) и количество цифр дробной части (scale). 
+	Рекомендуемый тип данных для работы с валютами и координатами. Можно использовать синонимы NUMERIC, DEC, FIXED.
+TINYINT — целые числа от ?127 до 128, занимает 1 байт хранимой памяти.
+BOOL — 0 или 1. Однозначный ответ на однозначный вопрос — false или true. Название столбцов типа boolean часто начинается с is, has, can, allow. По факту это даже не отдельный 
+	тип данных, а псевдоним для типа TINYINT (1). Тип настолько востребован на практике, что для него в MySQL создали встроенные константы FALSE (0) или TRUE (1). Можно 
+	использовать синоним BOOLEAN.
+FLOAT — дробные числа с плавающей запятой (точкой).
+Скопировать структуру и ключи таблицы, без копирования данных.
+CREATE TABLE NEW_TableName LIKE OLD_TableName
+
+Символьные:
+Символьные
+VARCHAR(N) — N определяет максимально возможную длину строки. Создан для хранения текстовых данных переменной длины, поэтому память хранения зависит от длины строки. Наиболее 
+часто используемый тип строковых данных.
+CHAR(N) — как и с varchar, N указывает максимальную длину строки. Char создан хранить данные строго фиксированной длины, и каждая запись будет занимать ровно столько памяти, 
+сколько требуется для хранения строки длиной N.
+TEXT — подходит для хранения большого объема текста до 65 KB, например, целой статьи.
+
+Дата и время:
+Дата и время
+DATE — только дата. Диапазон от 1000-01-01 по 9999-12-31. Подходит для хранения дат рождения, исторических дат, начиная с 11 века. Память хранения — 3 байта.
+TIME — только время — часы, минуты, секунды — «hh:mm:ss». Память хранения — 3 байта.
+DATETIME — соединяет оба предыдущих типа — дату и время. Использует 8 байтов памяти.
+TIMESTAMP — хранит дату и время начиная с 1970 года. Подходит для большинства бизнес-задач. Потребляет 4 байта памяти, что в два раза меньше, чем DATETIME, поскольку использует 
+более скромный диапазон дат.
+
+Бинарные
+Используются для хранения файлов, фото, документов, аудио и видеоконтента. Все это хранится в бинарном виде.
+
+BLOB — до 65 КБ бинарных данных
+LARGEBLOB — до 4 ГБ.
+Подробный разбор типов данных, включая более специализированные типы, например, ENUM, SET или BIGINT UNSIGNED, будет в отдельной тематической статье.
+
+
+Клонировать таблицы базы данных со всеми данными.
+CREATE TABLE NEW_TableNameSELECT *FROM OLD_TableName
+
+или
+CREATE TABLE NEW_TableName
+LIKE OLD_TableName
+INSERT INTO NEW_TableName
+SELECT *
+FROM OLD_TableName;
+
+
+Удалить таблицу:	
+DROP TABLE Clients;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

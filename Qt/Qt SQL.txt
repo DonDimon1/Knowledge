@@ -1,0 +1,148 @@
+#include <QtSql/QSqlDatabase> //Для работы с SQL
+или просто : #include <QSqlDatabase>
+
+https://www.youtube.com/watch?v=prMux00gZyE&ab_channel=LearnQT
+https://www.youtube.com/watch?v=mcdTfJb5d7c&ab_channel=%D0%9F%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%BD%D1%8B%D0%B9%D0%9A%D0%BE%D1%82
+
+QT DB без SQL: https://www.youtube.com/watch?v=mcdTfJb5d7c&ab_channel=%D0%9F%D1%80%D0%BE%D0%B3%D1%80%D0%B0%D0%BC%D0%BC%D0%BD%D1%8B%D0%B9%D0%9A%D0%BE%D1%82 
+
+
+Узнать какие SQL драйвера установлены:
+qDebug() << "Drivers list: " << QSqlDatabase::drivers();
+
+Если ошибка:
+warning unknown: QSqlDatabase: QMYSQL driver not loaded
+warning unknown: QSqlDatabase: available drivers: QMYSQL
+
+То читать гайд в конце: https://pavelk.ru/mysql-5-5-i-qt-qtcreator-4-8-1-windows-7-x64/?ysclid=lup7mewms7858390836
+
+
+___________________________________
+Работа с базами данных в Qt
+https://qtdocs.narod.ru/4.1.0/doc/html/qtsql.html
+
+#############
+Соединение с базой данных: https://habr.com/ru/articles/51650/
+
+QSqlDatabase db = QSqlDatabase::addDatabase("QMYSQL", "mydb"); //Создания объекта соединения
+db.setHostName("127.0.0.1");
+db.setDatabaseName("test");
+db.setUserName("root");
+db.setPassword("EAZzae1234");
+bool ok = db.open(); 						//Проверка подключения к БД
+qDebug() << ok; 						//Вывод результата подключения
+
+QSqlDatabase::lastError()					//Если open() потерпит неудачу, он вернет false. В этом случае, можно получить информацию об ошибке
+
+QSqlDatabase::close() 						//Закрыть соединение
+QSqlDatabase::removeDatabase() 					//Затем удалить соединение
+
+
+#############
+Выполнение инструкций SQL
+Класс QSqlQuery обеспечивает интерфейс для выполнения SQL запросов и навигации по результирующей выборке. Для выполнения SQL запросов, просто создают объект QSqlQuery и вызывают
+QSqlQuery::exec(). Если возникает ошибка, exec() возвращает false.
+
+QSqlQuery query;
+query.exec("SELECT name, salary FROM employee WHERE salary > 50000");
+
+
+QSqlQuery предоставляет единовременный доступ к результирующей выборке одного запроса. После вызова exec(), внутренний указатель QSqlQuery указывает на позицию перед первой 
+записью. Если вызвать метод QSqlQuery::next() один раз, то он переместит указатель к первой записи. После этого необходимо повторять вызов next(), чтобы получать доступ к другим
+записям, до тех пор пока он не вернет false. Вот типичный цикл, перебирающий все записи по порядку:
+
+while (query.next()) {
+     QString name = query.value(0).toString();
+     int salary = query.value(1).toInt();
+     qDebug() << name << salary;
+}
+
+
+QSqlQuery может выполнять не только SELECT, но также и любые другие запросы. Следующий пример вставляет запись в таблицу, используя INSERT:
+
+QSqlQuery query;
+query.exec("INSERT INTO employee (id, name, salary) "
+    "VALUES (1001, 'Thad Beaumont', 65000)");
+
+
+Если надо одновременно вставить множество записей, то зачастую эффективней отделить запрос от реально вставляемых значений. Это можно сделать с помощью вставки значений через 
+параметры. Qt поддерживает два синтаксиса вставки значений: поименованые параметры и позиционные параметры. В следующем примере показана вставка с помощью поименованного 
+параметра:
+
+QSqlQuery query;
+query.prepare("INSERT INTO employee (id, name, salary) "
+   "VALUES (:id, :name, :salary)");
+query.bindValue(":id", 1001);
+query.bindValue(":name", "Thad Beaumont");
+query.bindValue(":salary", 65000);
+query.exec();
+
+
+В этом примере показана вставка с помощью позиционного параметра:
+
+QSqlQuery query;
+query.prepare("INSERT INTO employee (id, name, salary) "
+   "VALUES (?, ?, ?)");
+query.addBindValue(1001);
+query.addBindValue("Thad Beaumont");
+query.addBindValue(65000);
+query.exec();
+
+При вставке множества записей требуется вызвать QSqlQuery::prepare() только однажды. Далее можно вызвать bindValue() или addBindValue() с последующим вызовом exec() столько раз,
+сколько потребуется.
+
+
+#############
+Отображение данных в таблице-представлении
+Классы QSqlQueryModel, QSqlTableModel и QSqlRelationalTableModel могут использоваться в качестве источников данных для классов представлений Qt, таких как QListView, QTableView
+и QTreeView. На практике наиболее часто используется QTableView. В следующем примере создается представление основанное на модели данных SQL:
+
+QSqlTableModel model;
+model.setTable("employee");
+QTableView *view = new QTableView;
+view->setModel(&model);
+view->show();
+
+
+Если модель является моделью для чтения-записи (например, QSqlTableModel), то представление позволяет редактировать поля. Это можно отключить с помощью следующего кода:
+
+view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+
+Можно использовать одну и ту-же модель в качестве источника данных для нескольких представлений. Если пользователь изменяет данные модели с помощью одного из представлений, другие представления немедленно отобразят изменения.
+Классы-представления для обозначения колонок наверху отображают заголовки. Для изменения текста заголовка, используется функция setHeaderData() модели. Например:
+
+model->setHeaderData(0, Qt::Horizontal, QObject::tr("ID"));
+model->setHeaderData(1, Qt::Horizontal, QObject::tr("Name"));
+model->setHeaderData(2, Qt::Horizontal, QObject::tr("City"));
+model->setHeaderData(3, Qt::Horizontal, QObject::tr("Country"));
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
