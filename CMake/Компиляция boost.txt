@@ -1,0 +1,189 @@
+Как настроить Qt Creator для использования Boost в Windows
+https://stackoverflow.com/questions/18562603/how-to-configure-qt-creator-to-use-boost-in-windows
+
+Подключение библиотеки Boost в Qt для компиляторов MinGW и MSVC
+https://evileg.com/ru/post/160/
+
+
+
+
+Ответ от ChatGPT:
+Компиляция библиотеки Boost и её подключение к проекту на Qt через CMake на Windows 10 с использованием MinGW состоит из нескольких шагов. Ниже приведена подробная инструкция:
+
+### Шаг 1: Скачивание и установка Boost
+
+1. Скачайте исходный код Boost с официального сайта [Boost](https://www.boost.org/users/download/).
+2. Распакуйте архив Boost в удобное для вас место, например, `C:\boost_1_82_0`.
+
+### Шаг 2: Компиляция Boost с MinGW
+
+1. Откройте командную строку и перейдите в каталог с распакованным Boost:
+   ```sh
+   cd C:\boost_1_82_0
+   ```
+
+2. Запустите команду bootstrap для создания скрипта b2 (Boost.Build):
+   ```sh
+   bootstrap.bat mingw
+   ```
+
+3. После успешного выполнения предыдущей команды запустите b2 для компиляции Boost:
+   ```sh
+   b2 toolset=gcc --build-type=complete --prefix="C:\boost_1_82_0\install" install
+   ```
+   Параметр `--prefix` указывает, куда будут установлены скомпилированные библиотеки.
+
+### Шаг 3: Подключение Boost к проекту на Qt через CMake
+
+1. Создайте (или откройте) файл `CMakeLists.txt` вашего проекта и добавьте следующие строки:
+
+   ```cmake
+   cmake_minimum_required(VERSION 3.14)
+
+   project(MyQtProject)
+
+   set(CMAKE_CXX_STANDARD 17)
+
+   # Укажите путь к установленным библиотекам Boost
+   set(BOOST_ROOT "C:/boost_1_82_0/install")
+   set(BOOST_INCLUDEDIR "${BOOST_ROOT}/include")
+   set(BOOST_LIBRARYDIR "${BOOST_ROOT}/lib")
+
+   # Найдите библиотеки Boost
+   find_package(Boost 1.82.0 REQUIRED COMPONENTS system filesystem) # Добавьте необходимые компоненты Boost
+
+   # Подключите директории с заголовочными файлами
+   include_directories(${Boost_INCLUDE_DIRS})
+
+   # Добавьте исходные файлы проекта
+   add_executable(MyQtProject main.cpp)
+
+   # Линковка с библиотеками Boost
+   target_link_libraries(MyQtProject ${Boost_LIBRARIES})
+   ```
+
+2. Сконфигурируйте и соберите ваш проект с помощью CMake. Откройте командную строку и выполните:
+
+   ```sh
+   mkdir build
+   cd build
+   cmake -G "MinGW Makefiles" ..
+   mingw32-make
+   ```
+
+### Пример использования Boost в коде
+
+Вот пример использования библиотеки Boost в вашем `main.cpp`:
+
+```cpp
+#include <boost/filesystem.hpp>
+#include <iostream>
+
+int main() {
+    boost::filesystem::path p("C:/");
+    std::cout << "Root directory: " << p.root_directory().string() << std::endl;
+    return 0;
+}
+```
+
+Этот код выводит корневую директорию.
+
+Теперь ваш проект должен быть успешно сконфигурирован для использования библиотеки Boost с помощью MinGW и CMake.
+
+
+
+
+
+________________________________________________________________________________________________________
+ПРоблема: ошибка: undefined reference to `__imp_WSARecv'
+
+Решение:https://stackoverflow.com/questions/36520283/how-to-link-ws2-32-in-clion
+
+
+Команда `target_link_libraries(MyQtProject ws2_32 wsock32)` в `CMakeLists.txt` используется для подключения к проекту необходимых системных библиотек, в данном случае WinSock. Это необходимо для того, 
+чтобы ваш проект мог использовать функции сетевого программирования, предоставляемые Windows.
+
+### Пояснение
+
+- **ws2_32**: Это библиотека Windows Sockets API версии 2.2 (WinSock2), которая предоставляет интерфейсы для программирования сетевых приложений. Она включает в себя функции для создания, управления и 
+использования сокетов.
+
+- **wsock32**: Это библиотека Windows Sockets API версии 1.1 (WinSock1). Она предоставляет функции для работы с сетями, но устарела по сравнению с WinSock2. В большинстве случаев, достаточно 
+использования только `ws2_32`.
+
+### Почему они нужны
+
+Если ваш проект использует Boost.Asio для асинхронного ввода-вывода и сетевого программирования, эти библиотеки необходимы для обеспечения функциональности сетевых операций на платформе Windows. Вот 
+почему они подключаются:
+
+- `__imp_WSAStartup`: Эта ошибка указывает на то, что функция `WSAStartup`, которая инициализирует использование WinSock, не может быть найдена компилятором. Линковка с `ws2_32` решает эту проблему, 
+предоставляя необходимые реализации.
+
+### Пример использования
+
+Вот как можно использовать `target_link_libraries` для подключения этих библиотек в `CMakeLists.txt`:
+
+```cmake
+cmake_minimum_required(VERSION 3.14)
+
+project(MyQtProject)
+
+set(CMAKE_CXX_STANDARD 17)
+
+# Укажите путь к установленным библиотекам Boost
+set(BOOST_ROOT "C:/boost_1_82_0/install")
+set(BOOST_INCLUDEDIR "${BOOST_ROOT}/include")
+set(BOOST_LIBRARYDIR "${BOOST_ROOT}/lib")
+
+# Использование динамических библиотек Boost
+set(Boost_USE_STATIC_LIBS OFF)
+set(Boost_USE_MULTITHREADED ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
+
+# Найдите библиотеки Boost
+find_package(Boost 1.82.0 REQUIRED COMPONENTS system filesystem asio)
+
+# Убедитесь, что компоненты Boost найдены
+if(NOT Boost_FOUND)
+    message(FATAL_ERROR "Could not find Boost!")
+endif()
+
+# Подключите директории с заголовочными файлами
+include_directories(${Boost_INCLUDE_DIRS})
+
+# Добавьте исходные файлы проекта
+add_executable(MyQtProject main.cpp)
+
+# Линковка с библиотеками Boost и WinSock
+target_link_libraries(MyQtProject ${Boost_LIBRARIES} ws2_32 wsock32)
+
+# Вывод для отладки
+message(STATUS "Boost include dirs: ${Boost_INCLUDE_DIRS}")
+message(STATUS "Boost libraries: ${Boost_LIBRARIES}")
+```
+
+### Шаги по сборке проекта
+
+1. Создайте каталог сборки и перейдите в него:
+
+   ```sh
+   mkdir -p build
+   cd build
+   ```
+
+2. Запустите CMake с указанием генератора и путей к Boost:
+
+   ```sh
+   cmake -G "MinGW Makefiles" -DBOOST_ROOT="C:/boost_1_82_0/install" -DBoost_LIBRARY_DIRS="C:/boost_1_82_0/install/lib" ..
+   ```
+
+3. Запустите сборку проекта:
+
+   ```sh
+   mingw32-make
+   ```
+
+### Итог
+
+Команда `target_link_libraries(MyQtProject ws2_32 wsock32)` необходима для подключения библиотек WinSock, которые обеспечивают функции сетевого программирования в Windows. Это позволяет использовать 
+сетевые возможности Boost.Asio и других библиотек, которые зависят от WinSock.

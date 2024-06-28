@@ -1,0 +1,2 @@
+Если требуется уставновить путь в переменную path, то нужно установить путь прямо в саму переменную, а не добавлять новую: 
+https://translated.turbopages.org/proxy_u/en-ru.ru.75301595-6679ca79-3e80e6c0-74722d776562/https/bobbyhadz.com/blog/gcc-is-not-recognized-as-an-internal-or-external-command
