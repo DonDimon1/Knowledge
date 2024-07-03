@@ -788,7 +788,206 @@ ________________________________________________________________________________
 ######################################################################################
 ######################################################################################
 ______________________________________________________________________________________
+Константные объекты и функции const 
 
+Объекты классов также могут представлять константы:
+class Person 
+{
+public:
+    std::string name;	// Имя
+    unsigned age;	// Возраст
+
+    Person(std::string p_name, unsigned p_age) {	
+        name = p_name;
+        age = p_age;
+    }
+};
+int main()
+{
+    const Person tom{"Tom", 38};						// Константный экземпляр класса
+    
+    std::cout << "Name: " << tom.name << "\tAge: " << tom.age << std::endl;	// Мы можем получить данные константы
+    
+    // tom.name = "Tom";    // ! Ошибка						// но изменить их нельзя
+    // tom.age = 38;        // ! Ошибка
+}
+
+Но при работе с константными объектами мы можем получить данные их полей, но изменить их не можем. Так, если в примере выше мы раскомментируем строку, то мы столкнемся с ошибкой на 
+этапе компиляции, так как объект tom - константа.
+
+tom.name = "Tom"; // ! Ошибка
+
+
+
+
+################
+Функции константного объекта
+Константность объекта накладывает некоторые ограничения на вызов его функций. Например, в класс Person выше добавим функцию print() для вывода данных объекта:
+class Person 
+{
+private:
+    std::string name;	// Имя
+    unsigned age;	// Возраст
+
+public:
+    Person(std::string p_name, unsigned p_age) {
+        name = p_name;
+        age = p_age;
+    }
+    void print() {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl; 	// Обычная функция
+    }
+};
+int main()
+{
+    const Person tom{"Tom", 38};
+    tom.print();    // ! Ошибка
+}
+
+Как ни странно, данный пример не скомпилируется из-за функции print, хотя в ней нет никакого изменения полей объекта. Потому что в любой функции класса теоретически можно изменять 
+его поля, а компилятор не может определить, меняется ли значение в функции или нет. Поэтому одинаково отказывается компилировать и те функции, которые меняют состояние объекта, и 
+те функции, которые его не меняют.
+
+Для константного объекта можно вызывать только константные функции. Для определения таких функций после списка параметров ставится ключевое слово const:
+
+class Person 
+{
+private:
+    std::string name; 	// Имя
+    unsigned age;	// Возраст
+
+public:
+    Person(std::string p_name, unsigned p_age){
+        name = p_name;
+        age = p_age;
+    }
+    
+    void print() const {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl;		// константная функция
+    }
+};
+int main()
+{
+    const Person tom{"Tom", 38};
+    tom.print();            // Name: Tom       Age: 38
+    Person bob{"Bob", 42};
+    bob.print();            // Name: Bob       Age: 42
+}
+
+В данном случае функция print определена как константная, поэтому ее можно вызвать как для константого, так и для неконстантного объекта. В любом случае в константной функции НЕ 
+должно происходить изменение полей класса.
+
+Еще одно ограничение, с которым можно столкнуться, касается вызова в константной функции других функций этого же класса - константная функция может вызыть только константные функции
+класса:
+
+class Person 
+{
+private:
+    std::string name;	// Имя
+    unsigned age;	// Возраст
+
+public:
+    Person(std::string p_name, unsigned p_age){
+        name = p_name;
+        age = p_age;
+    }
+    std::string getName() const{
+        return name;
+    }
+    unsigned getAge() const{
+        return age;
+    }
+    void print() const {	
+        std::cout << "Name: " << getName()  << "\tAge: " << getAge() << std::endl; 		// в константной функции можно  вызывать только константные функции 
+    }
+};
+int main()
+{
+    const Person tom{"Tom", 38};
+    tom.print();            // Name: Tom       Age: 38
+    Person bob{"Bob", 42};
+    bob.print();            // Name: Bob       Age: 42
+}
+
+Здесь дополнительно определены функции getName и getAge, которые соответственно возвращают имя и возраст. Обе эти функции константные, поэтому их можно вызвать в константной 
+функции print.
+
+
+
+################
+Возвращение констант
+
+Еще одно ограничение, связанное с константными функциями, состоит в том, что, если мы хотим возвратить из константной функции указатель или ссылку, то они указетель должен указывать
+на константу, а ссылка должна быть константной. В чем это проявляется? Попробуем возвратить ссылку и указатель:
+
+class Person 
+{
+private:
+    std::string name;	// Имя
+    unsigned age;	// Возраст
+
+public:
+    Person(std::string p_name, unsigned p_age){
+        name = p_name;
+        age = p_age;
+    }
+    
+    const std::string& getName() const{		// возвращаем константную ссылку
+        return name;
+    }
+    
+    const unsigned* getAge() const{		// возвращаем указатель на константу
+        return &age;
+    }
+    void print() const {
+        std::cout << "Name: " << name  << "\tAge: " << age << std::endl;
+    }
+};
+int main()
+{
+    const Person tom{"Tom", 38};
+ 
+    std::string tom_name =tom.getName();
+    const unsigned* tom_age = tom.getAge();
+ 
+    std::cout << "Name: " << tom_name  << "\tAge: " << *tom_age << std::endl;
+}
+
+Здесь константная функция getName возвращает константную ссылку, а функция getAge - указатель на константу.
+
+
+
+################
+Ключевое слово mutable
+
+Иногда бывает необходимо, чтобы какие-то данные константного объекта все-таки можно было менять. В этом случае для переменной, которую необходимо менять, можно использовать 
+ключевое слово mutable. И даже если объект является константным, значение такой переменной можно изменить.
+
+class Person 
+{
+public:
+    std::string name;		// Имя
+    mutable unsigned age;   	// переменную age можно изменить
+
+    Person(std::string p_name, unsigned p_age){
+        name = p_name;
+        age = p_age;
+    }
+    void print() const {
+        std::cout << "Name: " << name  << "\tAge: " << age << std::endl;
+    }
+};
+int main()
+{
+    const Person tom{"Tom", 38};
+    tom.age = 22;
+    tom.print();    // Name: Tom       Age: 22
+}
+
+
+
+
+______________________________________________________________________________________
 static
 
 Представим, что в классе Apple мы описали какую нибудь переменную, например int Count. Если мы создаём в main несколько объектов класса, то у каждого такого объекта будет своя
@@ -1067,6 +1266,9 @@ class Student : public Human{ 	//Класс Student является дочерним от класса Human
 
 };
 
+
+
+
 Пример наследования:
 
 class Human {
@@ -1107,26 +1309,37 @@ int main()
 }
 
 
+Конструкторы при наследовании не наследуются.
+
+
 ______________________________________________________________________________________
 Модификаторы доступа при наследовании private public protected
 
-Модификаторы доступа к конкретным полям и методам.
+Если переменные или функции в базовом классе являются закрытыми, то есть объявлены со спецификатором private то, производный класс хотя и наследует эти переменные и функции, но не 
+может к ним обращаться.
+
+Однако иногда возникает необходимость в таких переменных и функциях базового класса, которые были бы доступны в производных классах, но не были бы доступны извне. То есть тот же 
+private, только с возможностью доступа для производных классов. И именно для определения уровня доступа подобных членов класса используется спецификатор protected. 
+
+
+Модификаторы доступа к конкретным полям и методам:
 
 class A {
 public:
-	string msgOne = "Сообщение один";
-private:
-	string msgTwo = "Сообщение два";
+	string msgOne = "Сообщение один"; 	// Доступно откуда угодно
 protected:
-	string msgThree = "Сообщение три";
+	string msgThree = "Сообщение три"; 	// доступно только из производных(дочерних) классов
+private:
+	string msgTwo = "Сообщение два";  	// Недоступно ниоткуда.
+
 };
 
 class B : public A {
 public:
 	void PrintMsg() {
 		cout << msgOne << endl; //Так как поле msgOne public, мы можем его использовать.
-		//cout << msgTwo << endl; //Так как поле msgTwo private, то мы не можем его использовать нигде, кроме того класса где мы его описали.
 		cout << msgThree << endl; //Так как поле msgThree protected, класс наследника без проблем к нему обращается, но у нас не получится обратиться к полю через объект класса B.
+		//cout << msgTwo << endl; //Так как поле msgTwo private, то мы не можем его использовать нигде, кроме того класса где мы его описали.
 	}
 };
 
@@ -1143,7 +1356,28 @@ int main()
 }
 
 
-Модификаторы доступа при наследовании.
+
+
+
+###################
+Уровень доступа членов базового класса
+
+Как мы увидели, спецификатор доступа - public, private, protected играют большую роль в том, к каким именно переменным и функциям базового класса могут обращаться производные классы.
+Однако на доступ также влияет спецификатор доступа базового класса, применяемый при установке наследования:
+
+class B : public A
+
+Так, в примере выше мы используем спецификатор public. И здесь мы также можем использовать три варианта: public, protected или private. Если спецификатор базового класса явным 
+образом не указан:
+
+class B : A
+
+то по умолчанию применяется спецификатор private (При наследовании структур, если спецификатор доступа не укзаан, то по умолчанию применяется спецификатор public).
+
+Таким образом, в базовом классе при определении переменных и функций мы можем использовать три спецификатора для управления доступом: public, protected или private. И те же три 
+спецификатора мы можем использовать при установке наследования от базового класса. Эти спецификаторы накладываются друг на друга и образуют 9 возможных комбинаций.
+
+
 Свойства модификаторов доступа для полей и методов, которые были в родительском классе и были унаследованы в дочерний класс с модификатором наследования public никак не 
 меняются.
 Если же модификатор доступа дочернего класса будет private, то все поля, которые мы унаследовали от родительского класса, поменяют свой модификатор доступа на private.
@@ -1169,8 +1403,144 @@ int main()
 --------------------------------------------------------------------
 
 
+Ещё раз: вот 3 модификатора:
+
+1) public
+2) protected
+3) private
+
+Если модификтор наследования будет private, то всё измениться на private:
+1) private
+2) private
+3) private
+
+Если модификтор наследования будет protected, то измениться только public на protected:
+1) protected
+2) protected
+3) private
+
+Если модификтор наследования будет public, то ничего не изменится:
+1) public
+2) protected
+3) private
+
+Снизу вверх.
+
+
+
+
+#################
+Установка публичного доступа using
+
+Рассмотрим пример. Пусть спецификатором базового класса будет private:
+
+class Person
+{
+public:
+    Person(std::string name, unsigned age)
+    {
+        this->name = name;
+        this->age = age;
+    }
+    void print() const
+    {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl;
+    }
+protected:
+    std::string name;   // доступно из производных классов
+private:
+    unsigned age;
+};
+
+class Employee: private Person
+{
+public:
+    Employee(std::string name, unsigned age, std::string company): Person(name, age)
+    {
+        this->company = company;
+    }
+    void printEmployee() const
+    {
+        print();    // функция print внутри класса Employee доступна
+        std::cout << name << " works in " << company << std::endl;
+    }
+private:
+    std::string company;    // компания
+};
+ 
+int main()
+{
+    Employee employee {"Bob", 42, "Microsoft"};
+    employee.printEmployee();   // Bob works in Microsoft
+    // employee.print();       // функция print недоступна
+}
+
+
+
+
+Что делать, если в примере выше для класса Employee мы все таки хотим вызвать функцию print? 
+Мы можем восстановить уровень доступа с помощью ключевого слова using:
+
+class Person
+{
+public:
+    Person(std::string name, unsigned age)
+    {
+        this->name = name;
+        this->age = age;
+    }
+    void print() const
+    {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl;
+    }
+protected:
+    std::string name;   // доступно из производных классов
+private:
+    unsigned age;
+};
+
+class Employee: private Person
+{
+public:
+    Employee(std::string name, unsigned age, std::string company): Person(name, age)
+    {
+        this->company = company;
+    }
+    using Person::print;
+    void printEmployee() const
+    {
+        std::cout << name << " works in " << company << std::endl;
+    }
+private:
+    std::string company;    // компания
+};
+ 
+int main()
+{
+    Employee employee {"Bob", 42, "Microsoft"};
+    employee.print();  // Name: Bob       Age: 42 - функция доступна
+}
+
+
+В классе Employee мы устанавливаем уровень доступ к функции print базового класса Person как public:
+using Person::print;
+
+
+После этого функция print будет иметь свой первоначальный спецификатор доступа - public и будет доступна вне класса Employee:
+employee.print();    // Name: Bob       Age: 42 - функция доступна
+
+Подобным образом можно сделать публичной и переменную name, несмотря на то, что в базовом классе Person она определена как protected:
+using Person::name;
+
+Однако если переменные и функции определены в базовом классе как приватные сделать их публичными нельзя.
+
+
+
+
 ______________________________________________________________________________________
 Порядок вызова конструкторов при наследовании
+
+Конструкторы при наследовании не наследуются.
 
 Пример: Класс А родительский. Класс B является наследником класса А. Класс С является наследником класса В. 
 
@@ -1235,6 +1605,8 @@ int main()
 Деструктор вызвался класса А!
 
 
+
+
 ______________________________________________________________________________________
 Вызов конструктора базового класса из конструктора класса-наследника
 
@@ -1277,6 +1649,222 @@ int main()
 		
 	return 0;
 }
+
+
+
+______________________________________________________________________________________
+Подключение конструктора базового класса
+
+Если бы у нас было бы полное соответствие по параметрам между двумя классами, то мы могли бы и не определять отдельный конструктор для Employee, а подключить конструктор базового 
+класса:
+
+
+class Person
+{
+public:
+    Person(std::string name, unsigned age)
+    {
+        this->name = name;
+        this->age = age;
+    }
+    void print() const
+    {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl;
+    }
+private:
+    std::string name;       							//  имя
+    unsigned age;           							// возраст
+};
+class Employee: public Person
+{
+public:
+    using Person::Person;   							// подключаем конструктор базового класса
+};
+  
+int main()
+{
+    Person person {"Tom", 38};
+    person.print();     // Name: Tom       Age: 38
+  
+    Employee employee {"Bob", 42};
+    employee.print();   // Name: Bob       Age: 42
+}
+
+
+Здесь в классе Employee подключаем конструктор базового класса с помощью ключевого слова using:
+	
+using Person::Person;
+
+Таким образом, класс Employee фактически будет иметь тот же конструктор, что и Person с теми же двумя параметрами. И этот конструктор мы также можем вызвать для создания 
+объекта Employee.
+
+
+
+______________________________________________________________________________________
+Запрет наследования
+
+Иногда наследование от класса может быть нежелательно. И с помощью спецификатора final мы можем запретить наследование:
+
+class Person final
+{
+};
+
+После этого мы не сможем унаследовать другие классы от класса Person. И, например, если мы попробуем написать, как в случае ниже, то мы столкнемся с ошибкой:
+
+class Employee : public Person
+{
+};
+
+
+
+______________________________________________________________________________________
+Скрытие функционала базового класса
+
+С++ позволяет определять в производном классе переменные и функции с теми же именами, что имеют переменные и функции в базовом классе. В этом случае переменные и функции 
+производного класса будут скрывать одноименные переменные и функции базового класса.
+
+Скрытие функций
+
+Производный класс может определить функцию с тем же именем, что и функция в базовом классе, с тем же или другим списком параметров. Для компилятора такая функция будет существовать 
+независимо от базового класса. И подобное определение функции в производном классе не будет переопределением функции из базового класса.
+
+class Person
+{
+public:
+    Person(std::string name, unsigned age) : name(name), age(age)
+    {}
+    void print() const
+    {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl;
+    }
+private:
+    std::string name;
+    unsigned age;
+};
+
+class Employee: public Person
+{
+public:
+    Employee(std::string name, unsigned age, std::string company): 
+        Person(name, age), company(company)
+    { }
+    void print() const
+    {
+        std::cout << "Works in " << company << std::endl;
+    }
+private:
+    std::string company;
+};
+ 
+int main()
+{
+    Employee tom{"Tom", 38, "Google"};
+    tom.print(); 							// Works in Google
+}
+
+Здесь класс Person, который представляет человека, определяет функцию print(), которая выводит значение переменных name и age. Класс Employee, который представляет сотрудника 
+компании и является производным от класса Person, также определяет функцию print(), которая выводит значение переменной company. В итоге объект Employee будет использовать 
+реализацию функции print класса Employee, а не класса Person.
+
+Функция print в Employee скрывает функцию print класса Person. Однако иногда может потребоваться возможность вызвать реализацию функции, которая определена именно в базовом классе. 
+В этом случае можно использовать оператор ::
+
+базовый_класс::функция
+
+class Person
+{
+public:
+    Person(std::string name, unsigned age) : name(name), age(age)
+    {}
+    void print() const
+    {
+        std::cout << "Name: " << name << "\tAge: " << age << std::endl;
+    }
+private:
+    std::string name;
+    unsigned age;
+};
+class Employee: public Person
+{
+public:
+    Employee(std::string name, unsigned age, std::string company): 
+        Person(name, age), company(company)
+    { }
+    void print() const
+    {
+        Person::print();    						// вызываем функцию print из базового класса
+        std::cout << "Works in " << company << std::endl;
+    }
+private:
+    std::string company;
+};
+ 
+int main()
+{
+    Employee tom{"Tom", 38, "Google"};
+    tom.print();
+}
+
+Здесь вызов Person::print() представляет обращение к функции print базового класса Person. В итоге мы получим другой консольный вывод:
+
+Name: Tom  Age: 38
+Works in Google
+
+
+
+______________________________________________________________________________________
+Скрытие переменных
+
+Производный класс может иметь переменные с тем же именем, что и базовый класс, Хотя такие ситуации могут привести к путанице, и, возможно, представляют нелучший вариант наименования
+переменных. Тем не менее мы можем так делать. Например:
+
+class Integer
+{
+public:
+    Integer(unsigned value): value(value)
+    { }
+    void printInteger() const
+    {
+        std::cout << value << std::endl;
+    }
+protected:
+    unsigned value;
+};
+class Decimal: public Integer
+{
+public:
+    Decimal(unsigned i_value, unsigned d_value): Integer(i_value), value(d_value)
+    { }
+    void printDecimal() const
+    {
+        std::cout << Integer::value << "." << value << std::endl;
+    }
+protected:
+    unsigned value;
+};
+ 
+int main()
+{
+    Decimal decimal{12345, 3456};
+    decimal.printInteger(); // 12345
+    decimal.printDecimal(); // 12345.3456
+}
+
+Здесь класс Integer представляет целое число, значение которого хранится в переменной value. Этот класс наследуется классом Decimal, который представляет дробное число. Целая часть 
+хранится в поле value класса Integer. А для хранения дробной части определена своя переменная value. Причем переменная value в Integer имеет спецификатор protected, поэтому 
+теоретически мы могли бы обращаться к ней в классе Decimal. Однако поскольку в Decimal определена своя переменная value, то она скрывает переменную value и базового класса.
+
+Чтобы все таки обратиться к переменной value из базового класса, надо использовать оператор ::
+
+базовый_класс::переменная
+
+например:
+
+Integer::value
+
+Стоит учитывать, что таким образом мы можем обратиться только к переменным со спецификаторами public и protected. К приватным же переменным базового класса мы так обратиться не 
+можем.
+
 
 
 ______________________________________________________________________________________
@@ -1332,6 +1920,8 @@ int main()
 		
 	return 0;
 }
+
+
 
 
 ______________________________________________________________________________________
@@ -1669,6 +2259,202 @@ int main()
 	
 	return 0;
 }
+
+
+
+______________________________________________________________________________________
+Двойственность при одинаковых названиях в Множественном наследовании
+
+В примерах выше все классы имели функции, которые называются по разному. Но посмотрим, что будет в следующем случае:
+
+class Book    						// класс книги
+{
+public:
+    Book(unsigned pages): pages(pages) { }
+    void print()
+    {
+        std::cout << pages << " pages" << std::endl;
+    }
+private:
+    unsigned pages; 					// количество страниц
+};
+ 
+class File    						// класс электронного файла
+{
+public:
+    File(double size): size(size) { }
+    void print()
+    {
+        std::cout << size << "Mb" << std::endl;
+    }
+private:
+    double size;  					// размер файла
+};
+							// класс электронной книги
+class Ebook : public Book, public File   
+{
+public:
+    Ebook(std::string title, unsigned pages, double size): 
+        Book{pages}, File{size}, title{title}
+    { }
+    void printTitle()
+    {
+        std::cout << "Title: " << title << std::endl;
+    }
+private:
+    std::string title;
+};
+ 
+int main()
+{
+    Ebook cppbook {"About C++", 320, 5.6};
+    cppbook.print();    				// Ошибка компиляции
+}
+
+Здесь базовые классы Book и File имеют функцию с одним и тем же именем - print(). В итоге у нас получается двойственность, и такой код просто не скомпилируется.
+
+Чтобы решить проблему, мы можем указать, из какого конкретного класса мы хотим вызвать функцию print:
+
+int main()
+{
+    Ebook cppbook {"About C++", 320, 5.6};
+    cppbook.Book::print();    // 320 pages
+    cppbook.File::print();    // 5.6Mb
+}
+
+В качестве альтернативы мы можем выполнять операцию преобразования к нужному типу и затем вызывать функцию:
+
+int main()
+{
+    Ebook cppbook {"About C++", 320, 5.6};
+    static_cast<Book&>(cppbook).print();    // 320 pages
+    static_cast<File&>(cppbook).print();    // 5.6Mb
+}
+
+
+
+
+______________________________________________________________________________________
+Двойственное наследование и виртуальные базовые классы
+
+Еще одной формой двойственности при наследовании может быть наследование от нескольких классов, которые косвенно или напрямую наследуются от одного и того же класса. Например:
+
+class Person
+{
+public:
+    Person(std::string name): name{name} 
+    { 
+        std::cout << "Person created" << std::endl;
+    }
+    ~Person() 
+    { 
+        std::cout << "Person deleted" << std::endl;
+    }
+    void print() const
+    {
+        std::cout << "Person " << name << std::endl;
+    }
+private:
+    std::string name;
+};
+ 
+class Student: public Person
+{
+public:
+    Student(std::string name): Person{name} {}
+};
+
+class Employee: public Person
+{
+public:
+    Employee(std::string name): Person{name} {}
+};
+								// работающий студент
+class StudentEmployee: public Student, public Employee
+{
+public:
+    StudentEmployee(std::string name): Student{name}, Employee{name} {}
+};
+ 
+int main()
+{
+    StudentEmployee bob{"Bob"};
+    //bob.print();
+}
+
+Здесь в основе иерархии классов находится класс человека - Person, от которого наследуются класс рабочего Employee и класс студента Student. Но у нас может быть работающий студент. 
+И для этого определяем класс StudentEmployee, который наследуется от Student и Employee. Подобных ситуаций, конечно, лучше избегать, но тем не менее они то же могут встречаться. 
+И если мы запустим программу, то увидим, что для одного объекта StudentEmployee два раза вызывается конструктор и деструктор класса Person:
+
+Person created
+Person created
+Person deleted
+Person deleted
+
+Более того, мы видим, что вызов bob.print() не компилируется.
+
+Для решения этой проблемы в C++ применяются виртуальные базовые классы - при установке наследования перед именем базового класса указывается ключевое слово virtual. Применим 
+вирутальные классы:
+
+class Person
+{
+public:
+    Person(std::string name): name{name} 
+    { 
+        std::cout << "Person created" << std::endl;
+    }
+    ~Person() 
+    { 
+        std::cout << "Person deleted" << std::endl;
+    }
+    void print() const
+    {
+        std::cout << "Person " << name << std::endl;
+    }
+private:
+    std::string name;
+};
+ 
+class Student: public virtual Person
+{
+public:
+    Student(std::string name): Person{name} {}
+};
+
+class Employee: public virtual Person
+{
+public:
+    Employee(std::string name): Person{name} {}
+};
+										// работающий студент
+class StudentEmployee: public Student, public Employee
+{
+public:
+    StudentEmployee(std::string name): Person{name}, Student{name}, Employee{name}  {}
+};
+ 
+int main()
+{
+    StudentEmployee bob{"Bob"};
+    bob.print();
+}
+
+Теперь при определении классов Student и Employee базовый класс Person указан как виртуальный:
+
+class Student: public virtual Person
+class Employee: public virtual Person
+
+В итоге для объекта StudentEmployee мы сможем вызвать функцию print.
+
+А консольный вывод будет следующим:
+
+Person created
+Person Bob
+Person deleted
+
+Таким образом, мы видим, что теперь конструктор и деструктор класса Person вызываются только один раз.
+
+
 
 
 ______________________________________________________________________________________
