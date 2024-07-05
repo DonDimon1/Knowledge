@@ -1,10 +1,14 @@
-Как настроить Qt Creator для использования Boost в Windows
+﻿Как настроить Qt Creator для использования Boost в Windows
 https://stackoverflow.com/questions/18562603/how-to-configure-qt-creator-to-use-boost-in-windows
 
 Подключение библиотеки Boost в Qt для компиляторов MinGW и MSVC
 https://evileg.com/ru/post/160/
 
 
+
+Проверяю на рабочем компе: 8 библиотек не скомпилилось
+bootstrap.bat gcc
+b2 toolset=gcc --build-type=complete --prefix="D:\boost_1_60_0l" install
 
 
 Ответ от ChatGPT:
@@ -61,6 +65,35 @@ https://evileg.com/ru/post/160/
    # Линковка с библиотеками Boost
    target_link_libraries(MyQtProject ${Boost_LIBRARIES})
    ```
+
+
+
+
+
+
+
+Вот как у меня получилось:
+
+cmake_minimum_required(VERSION 3.5)
+project(PacketComparison LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(BOOST_ROOT "D:/boost_1_60_0l")
+set(BOOST_INCLUDEDIR "${BOOST_ROOT}/include")
+
+find_package(Boost REQUIRED)
+
+add_executable(PacketComparison main.cpp)
+
+target_link_libraries(PacketComparison Boost::boost)
+
+
+
+
+
+
+
 
 2. Сконфигурируйте и соберите ваш проект с помощью CMake. Откройте командную строку и выполните:
 
