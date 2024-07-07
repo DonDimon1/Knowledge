@@ -1,0 +1,158 @@
+библиотеки для проекта:
+
+curl
+https://packages.altlinux.org/ru/p10/srpms/curl/rpms/
+
+скачиваем 
+curl-8.7.1-alt2.x86_64.rpm
+libcurl-8.7.1-alt2.x86_64.rpm
+
+CMake:
+cmake_minimum_required(VERSION 3.5)
+
+project(PackageComparison LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+find_package(CURL REQUIRED)
+if(CURL_FOUND)
+    message(STATUS "Found libcurl: ${CURL_INCLUDE_DIRS}")
+    include_directories(${CURL_INCLUDE_DIRS})
+else()
+    message(FATAL_ERROR "libcurl not found")
+endif()
+
+#FIND_PACKAGE(Boost COMPONENTS system REQUIRED)
+#find_package(Boost REQUIRED COMPONENTS system thread json)
+#if(Boost_FOUND)
+#    message(STATUS "Found BOOST ${Boost_VERSION_STRING}")
+#endif()
+
+
+#include_directories(${Boost_INCLUDE_DIRS})
+
+add_executable(PackageComparison main.cpp)
+
+install(TARGETS PackageComparison LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+target_link_libraries(PackageComparison CURL::libcurl)
+
+#TARGET_LINK_LIBRARIES(PackageComparison PRIVATE ${Boost_LIBRARIES})
+
+
+
+
+
+
+
+_________________________________________________________________________________________
+nlohmann-json
+
+https://packages.altlinux.org/ru/p10/srpms/nlohmann-json/rpms/
+
+скачиваем:
+nlohmann-json-devel-3.10.4-alt1.x86_64.rpm (1261a2e8ca9ffa32a85301b4e61878e1)
+
+
+
+
+_________________________________________________________________________________________
+либо boost
+https://packages.altlinux.org/ru/p10/srpms/boost/rpms/
+
+скачиваем
+boost-complete-1.76.0-alt2.p10.1.noarch.rpm (41708658e4c8f12f22518752a1cd6d7e)
+
+
+
+
+_________________________________________________________________________________________
+Компиляция вручную:
+
+Для успешной компиляции файла main.cpp, в котором используется строка #include "PackageComparison.hpp", необходим сам заголовочный файл PackageComparison.hpp. Библиотека libPackageComparison.so нужна 
+на этапе линковки и выполнения программы, а заголовочный файл нужен на этапе компиляции, чтобы компилятор знал о структурах, функциях и других сущностях, объявленных в этом заголовочном файле.
+
+компиляция библиотеки:
+g++ -std=c++11 -shared -fPIC -o libPackageComparison.so libPackageComparison.cpp -lcurl -I/usr/include/nlohmann/
+
+g++ -std=c++11 -shared -fPIC -o libPackageComparison.so ./libPackageComparison.cpp -lcurl -I/usr/include/nlohmann/
+
+Пояснение ключей компилятора:
+-shared: указывает компилятору создать динамическую библиотеку.
+-fPIC: генерирует код в формате позиционно-независимого кода (Position Independent Code), что важно для динамических библиотек.
+-o libPackageComparison.so: задает имя выходной динамической библиотеки (.so расширение используется в Linux для динамических библиотек).
+libPackageComparison.cpp: исходный файл, который компилируется в библиотеку.
+-lcurl: указывает линкеру добавить libcurl в процесс сборки.
+
+
+
+
+компиляция main:
+g++ -o main main.cpp -L/path/to/libPackageComparison.so/directory -lPackageComparison -lcurl -lssl -lcrypto -I/path/to/nlohmann/json
+В моём случае:
+g++ -o main main.cpp -L/home/admin/QT_Project/PackageComparison2/ -lPackageComparison -lcurl -lssl -lcrypto -I/usr/include/nlohmann/
+
+
+Пояснение ключей компилятора:
+-std=c++11: указывает компилятору использовать стандарт C++11, который необходим для работы с библиотекой nlohmann/json.hpp.
+-o main: задает имя выходного исполняемого файла (можете выбрать любое имя, например, comparison_tool).
+main.cpp libPackageComparison.cpp: перечисление исходных файлов для компиляции.
+-lcurl: указывает линкеру добавить libcurl в процесс сборки.
+
+запуск программы:
+./main
+
+
+либо
+
+g++ -I./libPackageComparison -L./libPackageComparison -o my_program main.cpp -lPackageComparison
+
+-I./libPackageComparison указывает компилятору, где искать заголовочные файлы. (тоесть в папке libPackageComparison)
+-L./libPackageComparison указывает компилятору, где искать библиотеки.
+-lPackageComparison указывает компилятору на использование библиотеки libPackageComparison.so (пишем без .so)
+-o my_program имя будующего исполняемого файла
+main.cpp — это исходный файл, который нужно скомпилировать.
+
+
+
+_________________________________________________________________________________________
+Компиляция с помощью CMAKE
+
+Откройте терминал и установите права на выполнение скрипта с помощью команды chmod +x build_and_run.sh
+Выполните скрипт из терминала с помощью ./build_and_run.sh
+
+либо выполните команды вручную в консоли:
+
+cd PackageComparison
+mkdir build
+cd build
+cmake ..
+make
+./PackageComparison
+
+
+
+_________________________________________________________________________________________
+Чтобы временно установить LD_LIBRARY_PATH для текущей сессии терминала, можно использовать команду:
+export LD_LIBRARY_PATH=/path/to/your/library:$LD_LIBRARY_PATH
+
+
+Запуск программы с LD_LIBRARY_PATH
+LD_LIBRARY_PATH=/path/to/your/library ./your_program
+
+
+Добавление в .bashrc или .profile
+Чтобы сделать установку постоянной для всех сессий пользователя, можно добавить строку в файл .bashrc, .profile или .bash_profile:
+export LD_LIBRARY_PATH=/path/to/your/library:$LD_LIBRARY_PATH
+После редактирования файла перезагрузите сессию или выполните:
+source ~/.bashrc
+
+Пример использования
+Если у вас есть динамическая библиотека libexample.so в директории /home/user/mylibs, и вы хотите использовать ее при запуске вашей программы:
+export LD_LIBRARY_PATH=/home/user/mylibs:$LD_LIBRARY_PATH
+./your_program
+
+Примечание
+Использование LD_LIBRARY_PATH не рекомендуется для постоянного размещения библиотек, так как это может привести к проблемам с безопасностью и совместимостью. В продакшн-системах лучше устанавливать 
+библиотеки в стандартные системные директории (например, /usr/lib или /usr/local/lib) и использовать менеджеры пакетов для управления библиотеками.
