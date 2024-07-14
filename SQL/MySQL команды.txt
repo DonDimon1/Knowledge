@@ -68,7 +68,7 @@ SHOW TABLE STATUS FROM db_name;
 Управление базами данных
 
 Создание базы данных из консоли сервера
-$ mysqladmin -u root -p create db_name
+$ mysqladmin -u root -p create db_name 
 
 Удаление базы данных из консоли сервера
 mysqladmin -u root -p drop db_name

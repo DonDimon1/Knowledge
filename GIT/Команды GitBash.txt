@@ -60,6 +60,11 @@ ________________________________________________________________________________
 Чтобы опубликовать новую ветку на удалённом репозитории нужно выполнить команду, находясь в локальной ветке, которую хотим опубликовать:
 git push имя_новой_удалённой_ветки
 
+С токеном:
+git push https://<TOKEN>@github.com/<USERNAME>/<REPOSITORY>.git <BRANCH>
+
+git push https://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@github.com/DonDimon1/Computer-Accounting.git feature
+
 
 #################
 Слияние веток
