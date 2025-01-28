@@ -182,7 +182,7 @@ class vector {
 	size_t cap_;						// capacity
 
 	void reserve(size_t newcap) {
-		T* newarr_ = new T[newcap];			// Здесь позникает проблема
+		T* newarr_ = new T[newcap];			// Здесь возникает проблема
 	}	
 
 	void push_pack(const T& value) {			

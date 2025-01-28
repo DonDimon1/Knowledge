@@ -1,0 +1,221 @@
+#include <iostream>
+#include <memory>		// Для std::allocator
+#include <type_traits>	// Для std::conditional
+
+template <typename T>
+class vector {
+private:
+	T* data_;
+	size_t sz_;
+	size_t cap_;
+	std::allocator<T> alloc_;
+
+	// Общий класс итераторов
+	template <bool IsConst>													// Чтобы не было копипасты итераторов с const и не const мы используем conditional.
+	class base_iterator {													// Если IsConst == true, то это const_iterator, иначе просто iterator
+	public:
+		using pointer_type = std::conditional_t<IsConst, const T*, T*>; 	// Тип указателя 
+		using reference_type = std::conditional_t<IsConst, const T&, T&>; 	// Тип ссылки
+		using value_type = T;
+
+	private:
+		base_iterator(pointer_type ptr) : ptr_(ptr) {}
+		base_iterator(const base_iterator& other) = default;
+		base_iterator& operator=(const base_iterator& other) = default;
+
+		pointer_type ptr_;
+		friend class vector<T>;
+
+
+	public:
+		reference_type operator*() const {
+			return *ptr_;
+		}
+		pointer_type operator->() const {
+			return ptr_;
+		}
+		base_iterator& operator++() {
+			++ptr_;
+			return *this;
+		}
+		base_iterator operator++(int) {
+			base_iterator temp = *this;
+			++ptr_;
+			return temp;
+		}
+		base_iterator& operator--() {
+			--ptr_;
+			return *this;
+		}
+		base_iterator operator--(int) {
+			base_iterator temp = *this;
+			--ptr_;
+			return temp;
+		}
+		operator base_iterator<true>() const {		// Неявное преобразование без конст в конст итератор
+			return { ptr_ };
+		}
+		bool operator==(const base_iterator& other) const {
+			return ptr_ == other.ptr_;
+		}
+		bool operator!=(const base_iterator& other) const {
+			return ptr_ != other.ptr_;
+		}
+	};
+
+public:
+	using iterator = base_iterator<false>;		// Стандартный итератор
+	using const_iterator = base_iterator<true>;	// Константный итератор
+
+	iterator begin() { return iterator{ data_ }; }
+	iterator end() { return iterator{ data_ + sz_ }; }
+	const_iterator begin() const { return const_iterator{ data_ }; }
+	const_iterator end() const { return const_iterator{ data_ + sz_ }; }
+
+
+	vector() : data_(nullptr), sz_(0), cap_(0) {}
+
+	vector(size_t num) : sz_(num), cap_(num) {
+		data_ = alloc_.allocate(num);
+		size_t index = 0;
+
+		try {
+			for (; index < num; ++index) {
+				alloc_.construct(data_ + index, T());				// Конструируем элементы по умолчанию
+			}
+		}
+		catch (...) {
+			for (size_t i = 0; i < index; ++i) {
+				alloc_.destroy(data_ + i);
+			}
+			alloc_.deallocate(data_, num);
+			throw;
+		}
+
+	}
+
+	~vector() {
+		for (size_t i = 0; i < sz_; ++i) {
+			alloc_.destroy(data_ + i);								// Уничтожаем элементы	
+		}
+		alloc_.deallocate(data_, cap_);								// Ошибка 1. был sz_ вместо cap_	// Освобождаем память
+	}
+
+	const size_t size() const { return sz_; }
+	const size_t capacity() const { return cap_; }
+
+	void reserve(size_t newcap) {												// Увеличение ёмкость вектора
+		if (newcap <= cap_)														
+			return;
+
+		T* newdata = alloc_.allocate(newcap);									// Выделяем новую память под все элементы
+		size_t index = 0;														// Счётчик сконструированных объектов
+
+		try {
+			for (; index < sz_; ++index) {
+				alloc_.construct(newdata + index, std::move(data_[index]));		// Перемещаем старые элементы
+			}
+		}
+		catch (...) {															// Если исключение
+			for (size_t i = 0; i < index; ++i) {								// Проходим все только что созданные объекты
+				alloc_.destroy(newdata + i);									// Уничтожаем их
+			}
+			alloc_.deallocate(newdata, newcap);									// Очищаем новую память
+			throw;
+		}
+
+		for (size_t i = 0; i < sz_; ++i) {										// Если все прошло нормально
+			alloc_.destroy(data_ + i);											// Уничтожаем старые элементы
+		}
+
+		alloc_.deallocate(data_, cap_);											// Освобождаем старую память
+		cap_ = newcap;
+		data_ = newdata;
+	}
+
+	void push_back(T newdata) {										// Принимаем по значению чтобы не делать перегрузки для lvalue и rvalue
+		if (sz_ == cap_) {											// Если ёмкости недостаточно
+			reserve((cap_ > 0) ? cap_ * 2 : 1);						// Увеличиваем ёмкость	
+		}
+
+		try {
+			alloc_.construct(data_ + sz_, newdata);					// Конструируем элемент
+		}
+		catch (...) {
+			throw;
+		}
+		
+		++sz_;
+	}
+
+	void pop_back() {
+		if (sz_ > 0) {
+			--sz_;
+			alloc_.destroy(sz_);
+		}
+	}
+
+	T& operator[](size_t num) {
+		return data_[num];
+	}
+
+	/* class iterator {
+	private:
+		T* ptr_;
+	public:
+		iterator(T* ptr): ptr_(ptr){}
+		iterator(const iterator& other) = default;
+		iterator& operator=(const iterator& other) = default;
+
+		T& operator*() const {
+			return *ptr_;
+		}
+		T* operator->() const {
+			return ptr_;
+		}
+		/* T* operator++() {
+			return ++ptr_;
+		} */
+		/*
+		iterator& operator++() {
+			++ptr_;
+			return *this;
+		}
+		iterator operator++(int) {
+			iterator temp = *this;
+			++ptr_;
+			return temp;
+		}
+		iterator& operator--() {
+			--ptr_;
+			return *this;
+		}
+		iterator operator--(int) {
+			iterator temp = *this;
+			--ptr_;
+			return temp;
+		}
+	}; */
+
+	//T* begin() { return data_; }
+	//T* end() { return data_ + sz_; }
+	//iterator begin() { return iterator{data_}; }
+	//iterator end() { return iterator{data_ + sz_}; }
+};
+
+int main() {
+	vector<int> v(5);
+	for (size_t i = 0; i < 5; ++i) {
+		//std::cout << v[i] << std::endl;
+		v[i] = i;
+	}
+	vector<int>::iterator it = v.begin();
+	vector<int>::iterator it_2 = v.end();
+
+	for (vector<int>::iterator it = v.begin(); it != v.end(); ++it) {
+		std::cout << *it << std::endl;
+	}
+
+	std::cin.get();
+	return 0;
+}

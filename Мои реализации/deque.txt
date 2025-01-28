@@ -1,0 +1,351 @@
+#include <iostream>
+#include <memory>		// Для std::allocator
+#include <type_traits>	// Для std::conditional
+#include <cmath>
+
+template <typename T>
+class deque {
+private:
+	static const size_t BUCKET_SIZE = 3;		// Размер одного бакета (3) для простоты отладки
+	T** map_;									// Таблица указателей на бакеты
+	size_t mapSize_;							// Её размер
+	size_t begin_bucket_;						// Индекс первого бакета
+	size_t begin_offset_;						// Смещение в первом бакете. 
+	size_t end_bucket_;							// Индекс последнего бакета
+	size_t end_offset_;							// Смещение в последнем бакете
+	size_t min_allocated_index_ = begin_bucket_;// Индексы выделенной памяти. Для освобождении памяти ориентируюсь на них
+	size_t max_allocated_index_ = end_bucket_;
+	std::allocator<T> bucket_alloc_;
+	std::allocator<T*> map_alloc_;
+
+
+	void MapRealocation(size_t newMapSize = 0) {
+		if (mapSize_ == 0) {
+			// Мы имеем возможность при первой аллокации выделить определённое кол-во памяти
+			if (newMapSize == 0) {
+				mapSize_ = 1;
+				begin_bucket_ = end_bucket_ = 0;
+			}
+			else {
+				mapSize_ = newMapSize;
+				begin_bucket_ = end_bucket_ = newMapSize / 2;
+				min_allocated_index_ = max_allocated_index_ = begin_bucket_;
+			}
+				
+			map_ = map_alloc_.allocate(mapSize_);
+			T* bucket = bucket_alloc_.allocate(BUCKET_SIZE);
+			map_alloc_.construct(map_ + begin_bucket_, bucket);
+			return;
+		}
+
+
+		newMapSize = mapSize_ * 2 + 1;								// Новый размер таблицы
+		size_t numBuckets = end_bucket_ - begin_bucket_ + 1;		// Кол-во бакетов
+		// Расчитываем новые позицию бакетов в таблице для равномерного распределения
+		size_t new_begin_bucket = (newMapSize - numBuckets) / 2;	// Новый индекс первого бакета
+		size_t new_end_bucket = new_begin_bucket + numBuckets;		// Новый индекс последнего бакета. 
+		
+		// Выделяем память для новой таблицы
+		T** newMap = map_alloc_.allocate(newMapSize);
+		T** oldMap = map_ + begin_bucket_;
+
+		for (size_t i = 0; i < numBuckets; ++i) {
+			T* oldBucket = map_[begin_bucket_ + i];											// Старый бакет					
+			map_alloc_.construct(newMap + new_begin_bucket + i, std::move(oldBucket));		// Перемещаем старый бакет 
+		}
+
+		// Очищаем неиспользуемую память
+		// Память например между 0 и min_allocated_index неалоцирована соответсвтенно деалоцировать её не нужно.
+		// Деалоцировать промежуток памяти между min_allocated_index и begin_bucket_
+		for (size_t i = min_allocated_index_; i < begin_bucket_; ++i)
+			bucket_alloc_.deallocate(map_[i], BUCKET_SIZE);
+		// Деалоцировать промежуток памяти между end_bucket_ и max_allocated_index_
+		for (size_t i = end_bucket_; i < max_allocated_index_; ++i)
+			bucket_alloc_.deallocate(map_[i], BUCKET_SIZE);
+
+		map_alloc_.deallocate(map_, mapSize_);								// Очищаем память старой таблицы
+		map_ = newMap;														// Сохраняем указатель на новую таблицу
+		mapSize_ = newMapSize;												// Сохраняем новый размер таблицы
+		min_allocated_index_ = begin_bucket_ = new_begin_bucket;			// Новые индексы
+		max_allocated_index_ = end_bucket_ = new_end_bucket - 1;
+	}
+
+	void AddBackBucket(T newData) {
+		T* lastBucket = *(map_ + end_bucket_);						// Указатель на последний бакет
+		// Проверяем наличие места
+		if (end_offset_ == BUCKET_SIZE) {							// Если бакет закончился
+
+			if (end_bucket_ == mapSize_ - 1)						// Если место в таблице закончилось
+				MapRealocation();									// Выделяем ещё место в памяти для таблицы
+
+			++end_bucket_;											// Увеличиваем индекс последнего бакета
+			lastBucket = *(map_ + end_bucket_);						// Указатель на новый последний бакет
+
+			if (end_bucket_ > max_allocated_index_) {					// Проверяем память в бакете уже аллоцированна или ещё нет
+				++max_allocated_index_;									// Увеличиваем индекс аллоцированной памяти до последнего бакета
+				lastBucket = bucket_alloc_.allocate(BUCKET_SIZE);		// Выделяем место для нового бакета
+			}
+			
+			map_alloc_.construct(map_ + end_bucket_, lastBucket);	// Сохраняем в таблице указатель на новый последний бакет
+			end_offset_ = 0;										// Смещение последнего элемента в последнем бакете теперь равно 0					
+		}
+
+		// Добавляем элемент в бакет
+		bucket_alloc_.construct(lastBucket + end_offset_, newData);
+		++end_offset_;
+	}
+
+	void AddFrontBucket(T newData) {
+		T* firstBucket = *(map_ + begin_bucket_);					// Указатель на первый бакет
+		// Проверяем наличие места
+		if (begin_offset_ == 0) {									// Если сдвиг == 0, то бакет заполнен
+
+			if (begin_bucket_ == 0) 								// Если место в таблице закончилось
+				MapRealocation();									// Выделяем ещё место в памяти для таблицы
+
+			--begin_bucket_;										// Уменьшаем индекс первого бакета
+			firstBucket = *(map_ + begin_bucket_);					// Указатель на новый первый бакет
+
+			if (begin_bucket_ < min_allocated_index_) {					// Проверяем память в бакете уже аллоцированна или ещё нет
+				--min_allocated_index_;									// Уменьшаем индекс аллоцированной памяти до первого бакета
+				firstBucket = bucket_alloc_.allocate(BUCKET_SIZE);		// Выделяем место для нового первого бакета
+			}
+			
+			map_alloc_.construct(map_ + begin_bucket_, firstBucket);// Сохраняем в таблице указатель на новый первый бакет
+			begin_offset_ = BUCKET_SIZE;							// Смещение первого элемента в первом бакете теперь равно BUCKET_SIZE
+		}
+
+		// Добавляем элемент в бакет
+		--begin_offset_;
+		bucket_alloc_.construct(firstBucket + begin_offset_, newData);
+		
+	}
+
+public:
+	deque() :
+		map_(nullptr),
+		mapSize_(0),
+		begin_bucket_(0),
+		begin_offset_(0),
+		end_bucket_(0),
+		end_offset_(0),
+		min_allocated_index_(0),
+		max_allocated_index_(0)
+	{
+	}
+
+	~deque() {
+		if (mapSize_ == 0)
+			return;
+
+		T** ptr = map_;														// Указатель на таблицу
+
+		// Деалоцировать промежуток памяти между min_allocated_index и begin_bucket_
+		for (size_t i = min_allocated_index_; i < begin_bucket_; ++i)
+			bucket_alloc_.deallocate(map_[i], BUCKET_SIZE);
+		// Деалоцировать промежуток памяти между end_bucket_ и max_allocated_index_
+		for (size_t i = end_bucket_; i < max_allocated_index_; ++i)
+			bucket_alloc_.deallocate(map_[i], BUCKET_SIZE);
+
+		for (size_t i = begin_bucket_; i < end_bucket_ + 1; ++i) {			// Перебор всех бакетов
+			T* bucket = *(ptr + i);											// Указатель на текущий бакет
+
+			// Подготавливаем индексы
+			size_t firstElement = 0;										// Индекс первого элемента в бакете
+			size_t lastElement = BUCKET_SIZE;								// Индекс второго элемента в бакете
+			if (i == begin_bucket_)											// Первый бакет может начинаться не с 0
+				firstElement = begin_offset_;								// Поэтому устанавливаем смещение на первый бакет
+			if (i == end_bucket_)											// Последный бакет может заканчиваться не в самом конце
+				lastElement = end_offset_;									// Поэтому устанавливаем смещение на последний бакет
+
+
+			// Проход по очередному бакету
+			for (size_t j = firstElement; j != lastElement; ++j) {						// Проходим по бакету
+				bucket_alloc_.destroy(bucket + j);										// Удаляем элементы из бакета
+			}
+
+			bucket_alloc_.deallocate(bucket, BUCKET_SIZE);								// Очищаем память указателю бакет
+		}
+
+		map_alloc_.deallocate(map_, mapSize_);											// Очищаем всю таблицу из памяти
+	}
+
+	void push_back(T newData) {
+		// TODO: возможно тоже стоит передавать новый размер в функцию как в векторе
+		if (mapSize_ == 0)
+			MapRealocation();
+		AddBackBucket(newData);
+	}
+
+	void push_front(T newData) {
+		if (mapSize_ == 0)
+			MapRealocation(3);
+		AddFrontBucket(newData);
+	}
+
+	void pop_back() {
+		if (begin_bucket_ == end_bucket_ &&	begin_offset_ == end_offset_)	// Если индексы бакетов совпадают					
+			return;															// и если индексы смещений равны, то deque пустой
+
+		// Уменьшаем смещение end_offset_, чтобы указать на последний элемент
+		if (end_offset_ == 0) {
+			--end_bucket_;													// Уменьшаем индекс последнего бакета
+			end_offset_ = BUCKET_SIZE;										// Индекс смещения ставим на конец нового последнего бакета
+		}
+
+		--end_offset_;														// Уменьшаем индекс смещения
+		
+		// Уничтожаем элемент
+		T* lastBucket = map_[end_bucket_];									// Указатель на последний бакет
+		bucket_alloc_.destroy(lastBucket + end_offset_);					// Удаляем элемент из бакета
+
+		// Если deque стал пустым, обновляем индексы
+		if (begin_bucket_ == end_bucket_ && begin_offset_ == end_offset_) {
+			// Сбрасываем индексы 
+			//TODO: надо реализовать shrink_to_fit чтобы память не оставалась аллоцированной
+			begin_bucket_ = end_bucket_ = mapSize_ / 2;						// На случай если опять будут добавлять элементы
+			begin_offset_ = end_offset_ = 0;
+		}
+	}
+
+	void pop_front() {
+		if (begin_bucket_ == end_bucket_ && begin_offset_ == end_offset_)	// Если индексы бакетов совпадают					
+			return;															// и если индексы смещений равны, то deque пустой
+		
+		// Уничтожаем элемент
+		T* firstBucket = map_[begin_bucket_];								// Указатель на первый бакет
+		bucket_alloc_.destroy(firstBucket + begin_offset_);					// Удаляем элемент из бакета
+
+		++begin_offset_;													// Увеличиваем индекс смещения
+
+		// Если смещение достигло конца текущего бакета, переходим к следующему
+		if (begin_offset_ == BUCKET_SIZE) {
+			++begin_bucket_;												// Переходим на следующий бакет
+			begin_offset_ = 0;												// Сбрасываем смещение на начало нового бакета
+		}
+
+		// Если deque стал пустым, обновляем индексы
+		if (begin_bucket_ == end_bucket_ && begin_offset_ == end_offset_) {
+			// Сбрасываем индексы 
+			//TODO: надо реализовать shrink_to_fit чтобы память не оставалась аллоцированной
+			begin_bucket_ = end_bucket_ = mapSize_ / 2;						// На случай если опять будут добавлять элементы
+			begin_offset_ = end_offset_ = 0;
+		}	
+	}
+
+	void print(size_t indexMap, size_t indexBucket) {
+		T* bucket = *(map_ + indexMap);
+		T item = *(bucket + indexBucket);
+
+		std::cout << "map: " << indexMap << ", bucket: " << indexBucket << std::endl;
+		std::cout << "bucket: " << item << std::endl;
+		std::cout << "begin_bucket_: " << begin_bucket_ << std::endl;
+		std::cout << "begin_offset_: " << begin_offset_ << std::endl;
+		std::cout << "end_bucket_: " << end_bucket_ << std::endl;
+		std::cout << "end_offset_: " << end_offset_ << std::endl;
+		std::cout << "mapSize_: " << mapSize_ << std::endl;
+		std::cout << "----------------" << '\n' << std::endl;
+
+	}
+};
+
+
+int main() {
+	deque<int> dq;
+	dq.push_front(2);
+	dq.print(0, 2);
+	dq.push_front(1);
+	dq.print(0, 1);
+	dq.push_front(0);
+	dq.print(0, 0);
+	dq.push_back(3);
+	dq.print(1, 0);
+	dq.push_back(4);
+	dq.print(1, 1);
+	dq.push_front(-1);
+	dq.print(1, 2);
+
+	dq.pop_front();
+	dq.print(1, 2);
+	dq.print(2, 0);
+	dq.pop_front();
+	dq.print(2, 0);
+	dq.print(2, 1);
+	dq.pop_front();
+	dq.print(2, 1);
+	dq.print(2, 2);
+	dq.pop_front();
+	dq.print(2, 2);
+	dq.print(3, 0);
+	dq.pop_front();
+	dq.print(3, 0);
+	dq.print(3, 1);
+	dq.pop_front();
+	dq.print(3, 1);
+	/*
+	dq.print(3, 1);
+	dq.pop_back();
+	dq.print(3, 1);
+	dq.print(3, 0);
+	dq.pop_back();
+	dq.print(3, 0);
+	dq.print(2, 2);
+	dq.pop_back();
+	dq.print(2, 2);
+	dq.print(2, 1);
+	dq.pop_back();
+	dq.print(2, 1);
+	dq.print(2, 0);
+	dq.pop_back();
+	dq.print(2, 0);
+	dq.print(1, 2);
+	dq.pop_back();
+	dq.print(1, 2);*/
+	/*
+		int a = 0, b = 1, c = 2;
+		int* subArr = new int[3];
+		subArr[0] = a;
+		subArr[1] = b;
+		subArr[2] = c;
+
+		int d = 3, e = 4, f = 5;
+		int* subArr2 = new int[3];
+		subArr2[0] = d;
+		subArr2[1] = e;
+		subArr2[2] = f;
+		//std::cout << ++(*subArr) << std::endl;
+
+		int** mainArr = new int*[3];
+		mainArr[0] = subArr;
+
+
+		std::cout << subArr << std::endl;
+		std::cout << mainArr << std::endl;
+		std::cout << *mainArr << std::endl;
+		*/
+
+		/*
+		deque<int> dq;
+		dq.push_back(0);
+		dq.print(0,0);
+		dq.push_back(1);
+		dq.print(0,1);
+		dq.push_back(2);
+		dq.print(0,2);
+
+		dq.push_back(3);
+		dq.print(2,0);
+		dq.push_back(4);
+		dq.print(2,1);
+		dq.push_back(5);
+		dq.print(2,2);
+
+		dq.push_back(6);
+		dq.print(4,0);
+		dq.push_back(7);
+		dq.print(4,1);
+		*/
+
+	//std::cin.get();
+	return 0;
+}

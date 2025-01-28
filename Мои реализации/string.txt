@@ -1,0 +1,127 @@
+// ConsoleApplication2.cpp : Этот файл содержит функцию "main". Здесь начинается и заканчивается выполнение программы.
+//
+//#define _CRT_SECURE_NO_WARNINGS 1
+#pragma warning(disable : 4996)
+#include <iostream>
+//#include <compare>
+
+class string {
+public:
+	char* data_ = nullptr;
+	size_t len_ = 0;
+
+	string() {};
+	string(const char* data) {
+		len_ = std::strlen(data);
+		data_ = new char[len_ + 1];
+		std::strcpy(data_, data);
+	}
+	string(const string& str){
+		len_ = str.len_;
+		data_ = new char[len_ + 1];
+		std::strcpy(data_, str.data_);
+	}
+	string& operator=(const string& str) {
+		if (this == &str)
+			return *this;
+		delete data_;
+		len_ = str.len_;
+		data_ = new char[len_ + 1];
+		std::strcpy(data_, str.data_);
+		return *this;
+	}
+	string& operator=(const char* data) {
+		delete data_;
+		len_ = std::strlen(data);
+		data_ = new char[len_ + 1];
+		std::strcpy(data_, data);
+		return *this;
+	}
+	
+	char operator[](int i) {
+		return data_[i];
+	}
+
+	//std::weak_ordering operator<=>(const string& str) const = default;
+
+	
+	bool operator<(const string& str) {
+		return data_ < str.data_;
+	}
+	bool operator>(const string& str) {
+		return data_ > str.data_;
+	}
+	bool operator==(const string& str) {
+		return data_ == str.data_;
+	}
+	bool operator<=(const string& str) {
+		return data_ <= str.data_;
+	}
+	bool operator>=(const string& str) {
+		return data_ >= str.data_;
+	}
+	bool operator!=(const string& str) {
+		return data_ != str.data_;
+	}
+	string operator+(const string& str) {
+		string temp;
+		temp.len_ = (len_ + str.len_);
+		temp.data_ = new char[temp.len_ + 1] ('\0');
+		std::strcat(temp.data_, data_);
+		std::strcat(temp.data_, str.data_);
+		delete data_; data_ = nullptr;
+		return temp;
+		 
+		/*
+		len_ = len_ + str.len_;
+		char* temp = new char[len_ + 1] ('\0');
+		std::strcat(temp, data_);
+		std::strcat(temp, str.data_);
+
+		delete data_;
+		data_ = new char[len_ + 1] ('\0');
+		std::strcpy(data_, temp);
+
+		return *this;*/
+	}
+
+	
+	friend std::ostream& operator<<(std::ostream& os, const string& str) {
+		return os << str.data_; 
+	}
+
+	const char* c_str() const {
+		return data_;
+	}
+
+	void print() {
+		if(len_ > 0)
+			std::cout << data_ << std::endl;
+		else
+			std::cout << "" << std::endl;
+	}
+	
+	~string() {
+		len_ = 0;
+		delete data_;
+	}
+};
+
+int main() {
+
+	const char* data = { "123" };
+	string str1(data);	std::cout << "str1: ";				str1.print();
+	string str2(str1);	std::cout << "str2(str1): ";		str2.print();
+	string str3;		std::cout << "str3: ";				str3.print();
+	str3 = str1;		std::cout << "str3 = str1: ";		str3.print();
+	str3 = "abcde";		std::cout << "str3 = abc: ";		str3.print();
+	char c = str3[3];	std::cout << "char g = str3[3]: " << c << std::endl;
+	bool b = str3 < str1; std::cout << "bool b = str3 < str1: " << b << std::endl;
+	bool b2 = str3 > str1; std::cout << "bool b2 = str3 > str1: " << b2 << std::endl;
+	string str4 = str1 + str3; std::cout << "str4 = str1 + str3: ";		str4.print();
+	std::cout << "std::cout << str4: " << str4;
+	
+	return 0;
+}
+
+

@@ -1,0 +1,127 @@
+// ConsoleApplication2.cpp : Этот файл содержит функцию "main". Здесь начинается и заканчивается выполнение программы.
+//
+//#define _CRT_SECURE_NO_WARNINGS 1
+#include <iostream>
+
+template <typename T>
+class list {
+public:
+	class Node {
+	public:
+		T data_;
+		Node* next_ = nullptr;
+		Node* previous_ = nullptr;
+	};
+	
+	Node* first_ = nullptr;
+	Node* last_ = first_;
+	size_t sz_ = 0;
+
+	list() = default;
+	~list() {
+		clear();
+	}
+
+	void push_back(T new_data) {
+		if (first_ == nullptr) {
+			first_ = new Node();
+			first_->data_ = new_data;
+			++sz_; 
+			last_ = first_;
+		}
+		else {
+			Node* new_node = new Node();
+			new_node->data_ = new_data;
+			new_node->previous_ = last_;
+
+			last_->next_ = new_node;
+			last_ = last_->next_;
+			/*
+			Node* temp = first_;
+			while (temp->next_ != nullptr) {
+				temp = temp->next_;
+			}
+			temp->next_ = new_node;
+			*/
+			++sz_;
+		}
+	}
+	void push_front(T new_data) {
+		if (first_ == nullptr) 
+			push_back(new_data);
+		else {
+			Node* new_node = new Node();
+			new_node->next_ = first_;
+			new_node->data_ = new_data;
+			first_->previous_ = new_node;
+			first_ = new_node;
+			++sz_;
+		}
+	}
+	void pop_front() {
+		if (sz_ == 0)
+			return;
+		else if (sz_ == 1) {
+			delete first_;
+			first_ = nullptr;
+			last_ = first_;
+		}
+		else {
+			Node* second = first_->next_;
+			delete first_;
+			first_ = second;
+			first_->previous_ = nullptr;
+		}
+		--sz_;
+	}
+	void pop_back() {
+		if (sz_ == 0 || sz_ == 1) 
+			pop_front();			
+		else {
+			Node* penultimate = last_->previous_;
+			delete last_;
+			last_ = penultimate;
+			last_->next_ = nullptr;
+			--sz_;
+		}
+	}
+	void clear() {
+		Node* temp = first_;
+		Node* temp2 = first_;
+
+		while (temp != nullptr) {
+			temp2 = temp->next_;
+			delete temp;
+			temp = temp2;
+		}
+	}
+	void size() {
+		return sz_;
+	}
+};
+
+
+int main() {
+	//int i = 10;
+	list<int> l;
+	
+	l.push_back(40);
+	l.push_back(50);
+	l.push_back(60);
+	l.push_front(30);
+	l.push_front(20);
+	l.push_front(10);
+	
+	l.pop_front();
+	l.pop_back();
+	l.pop_front();
+	l.pop_back();
+	l.pop_front();
+	l.pop_back();
+	l.pop_front();
+
+	
+	return 0;
+}
+
+
