@@ -1,0 +1,91 @@
+#include <iostream>
+
+template <typename T>
+class list {
+    class BaseNode {
+    public:
+        BaseNode* next_ = nullptr;
+        BaseNode* previous_ = nullptr;
+        BaseNode() = default;
+    };
+
+    class Node: public BaseNode {
+    public:
+        T data_;
+        Node(const T data) : data_(data) {}
+    };
+
+    std::allocator<BaseNode> baseNodeAlloc_;
+    std::allocator<Node> nodeAlloc_;
+    BaseNode* fakeNode_ = nullptr;
+
+public:
+    list() {
+        fakeNode_ = baseNodeAlloc_.allocate(1);
+        fakeNode_->next_ = fakeNode_;
+        fakeNode_->previous_ = fakeNode_;
+    }
+    
+    ~list() {
+        while (!empty())
+            pop_back();
+        
+        baseNodeAlloc_.destroy(fakeNode_);
+        baseNodeAlloc_.deallocate(fakeNode_, 1);
+    }
+
+    void push_back(T data) {
+        Node* newNode = nodeAlloc_.allocate(1);
+        nodeAlloc_.construct(newNode, data);
+        
+        //BaseNode* lastNode = fakeNode_->previous_;
+
+        newNode->next_ = fakeNode_;
+        newNode->previous_ = fakeNode_->previous_;
+        fakeNode_->previous_->next_ = newNode;
+        fakeNode_->previous_ = newNode;
+    }
+
+    void pop_back() {
+        if (empty()) return;
+
+        Node* lastNode = static_cast<Node*>(fakeNode_->previous_);
+        fakeNode_->previous_ = lastNode->previous_;
+        lastNode->previous_->next_ = fakeNode_;
+
+        nodeAlloc_.destroy(lastNode);
+        nodeAlloc_.deallocate(lastNode, 1);
+    }
+
+    void push_front(T data) {
+        Node* newNode = nodeAlloc_.allocate(1);
+        nodeAlloc_.construct(newNode, data);
+
+        newNode->next_ = fakeNode_->next_;
+        newNode->previous_ = fakeNode_;
+        fakeNode_->next_->previous_ = newNode;
+        fakeNode_->next_ = newNode;
+    }
+
+    void pop_front() {
+        if (empty()) return;
+
+        Node* firstNode = static_cast<Node*>(fakeNode_->next_);
+        fakeNode_->next_ = firstNode->next_;
+        fakeNode_->next_->previous_ = fakeNode_;
+
+        nodeAlloc_.destroy(firstNode);
+        nodeAlloc_.deallocate(firstNode, 1);
+    }
+
+    bool empty() const {
+        return fakeNode_->next_ == fakeNode_;
+    }
+};
+
+int main() {
+    list<int> l;
+    l.push_back(123);
+    l.pop_back();
+    return 0;
+}

@@ -1,0 +1,151 @@
+#include <iostream>
+#include <vector>
+#include <array>
+#include <utility>
+
+template <typename T, size_t Capacity>
+struct PoolAllocator {
+private:										// Предварительное объявление
+	union FreeBlock {							// Мы будем хранить в памяти особенные блоки, а не объекты типа T. Блок может хранить информацию. Если информация будет удалена,
+		FreeBlock* next;						// то блок будет хранить указатель на следующий пустой блок. Т.о. мы переиспользуем стековую память. Блок памяти не может весить
+		alignas(T) char storage[sizeof(T)];		// меньше указателя, иначе возможна ошибка чтения чужой памяти.
+	};
+
+	//using Storage = std::aligned_storage_t<Capacity * sizeof(T), alignof(T)>;
+	std::array<FreeBlock, Capacity> buffer_;	// Буфер хранения блоков памяти. На самом аллокатор не должен содержать пул, но сделаю это для удобства в данный момент.
+	FreeBlock* freelist_ = nullptr;				// Указатель на первый свободный блок в списке.
+	size_t nextIndex_ = 0;						// Индекс следующего свободного блока.
+
+public:
+	PoolAllocator() {
+		//buffer_.at(0).next = nullptr;
+	}
+	
+	~PoolAllocator() {
+		 
+		while(freelist_ != nullptr) {
+			FreeBlock* block = freelist_;
+			freelist_ = freelist_->next;
+			block = nullptr;
+		}
+		for (size_t i = 0; i < nextIndex_; ++i) {
+			if(buffer_[i].next != nullptr) {
+				buffer_[i].~FreeBlock();
+				//FreeBlock* block = &buffer_[i];
+				//block->~FreeBlock();
+			}	
+		}
+	}
+	
+	T* allocate() {
+		if (freelist_) {
+			FreeBlock* block = freelist_;
+			freelist_ = freelist_->next;
+			return reinterpret_cast<T*>(block);
+		}
+		else if (nextIndex_ < Capacity) {
+			FreeBlock* block = &buffer_[nextIndex_];
+			T* ptr = reinterpret_cast<T*>(block);
+			++nextIndex_;
+			return ptr;
+		}
+		else
+			throw std::bad_alloc();
+	}
+
+	/*
+	T* allocate(size_t count = 1) {
+		if (count == 0 || count > Capacity)
+			throw std::bad_alloc();
+
+		else if (count == 1 && freelist_) {
+			FreeBlock* block = freelist_;
+			freelist_ = freelist_->next;
+			return reinterpret_cast<T*>(block);
+		}
+		else if (nextIndex_ + count <= Capacity) {
+			FreeBlock* block = &buffer_[nextIndex_];
+			T* ptr = reinterpret_cast<T*>(block);
+			nextIndex_ += count;
+			return ptr;
+			//TODO:: Можно реализовать счтчик пустых freelist_. Если кол-во freelist_ будет хватать то сделать reserve памяти
+			// чтобы несколько freelist_ встали рядом с друг другом.
+			// А может и нельзя так сделать т.к. указатели на все участки памяти будут невалидны. Надо подумать.
+		}
+		else
+			throw std::bad_alloc();
+	}*/
+
+
+	void deallocate(T* ptr, size_t count = 1) {
+		for (size_t i = 0; i < count; ++i) {
+			FreeBlock* block = reinterpret_cast<FreeBlock*>(ptr) + i;
+			block->next = freelist_;
+			freelist_ = block;
+		}
+		// Тут получается что освобождённые блоки записываются в freelist_ в обратном порядке. Это нужно исправить если реализовывать
+		// TODO с счтчик пустых freelist_ в allocate.
+	}
+
+	template <typename U, typename... Args>
+	void construct(U* ptr, Args&&... args) {
+		new (ptr) U(std::forward<Args>(args)...);
+	}
+
+	template <typename U>
+	void destroy(U* ptr) {
+		ptr->~U();
+	}
+	/*
+	template<typename U, std::size_t capacity>
+	allocator(allocator<U>) {}
+
+	template <typename U, std::size_t capacity>
+	struct rebind {
+		using other = allocator<U>;
+	};*/
+};
+
+int main() {
+	PoolAllocator<int, 1000> alloc;
+
+	const size_t size = 3;
+	int* temp[size]{ nullptr };
+	for (size_t i = 0; i < size; ++i) {
+		temp[i] = alloc.allocate();
+	}
+
+	for (size_t i = 0; i < size; ++i) {
+		alloc.construct(temp[i], i);
+	}
+
+	alloc.destroy(temp[2]);
+	alloc.deallocate(temp[2]);
+	temp[2] = alloc.allocate();
+	alloc.construct(temp[2], 2);
+
+	//alloc.construct(&temp[0], 1);			// Неправильное выравнивание!!!!!!!!!!!!!!!!!!
+	//alloc.construct(&temp[1], 2);
+	//alloc.construct(temp, 1);
+	//alloc.construct(temp + 2, 2);			
+	//alloc.construct(temp + 4, 3);
+
+	//alloc.destroy(&temp[0]);
+	//alloc.destroy(&temp[1]);
+	//alloc.destroy(temp + 2);
+	//alloc.destroy(temp + 4);
+
+
+
+	//temp = alloc.allocate(1);
+	/*
+	PoolAllocator<int, 1000> alloc;
+
+	int* p = alloc.allocate(1);
+
+	alloc.construct(p, 42);
+	std::cout << "Allocated value: " << *p << std::endl;
+
+	alloc.destroy(p);
+	alloc.deallocate(p, 1);*/
+}

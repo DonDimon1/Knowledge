@@ -1,0 +1,681 @@
+#include <iostream>
+#include <list>
+#include <array>
+#include <utility>
+#include <chrono>
+
+
+// Кастомный пул аллокатор
+template <typename T, size_t Capacity>
+struct PoolAllocator {
+private:										// Предварительное объявление
+    union FreeBlock {							// Мы будем хранить в памяти особенные блоки, а не объекты типа T. Блок может хранить информацию. Если информация будет удалена,
+        FreeBlock* next;						// то блок будет хранить указатель на следующий пустой блок. Т.о. мы переиспользуем стековую память. Блок памяти не может весить
+        alignas(T) char storage[sizeof(T)];		// меньше указателя, иначе возможна ошибка чтения чужой памяти.
+    };
+
+    //using Storage = std::aligned_storage_t<Capacity * sizeof(T), alignof(T)>;
+    std::array<FreeBlock, Capacity> buffer_;	// Буфер хранения блоков памяти. На самом аллокатор не должен содержать пул, но сделаю это для удобства в данный момент.
+    FreeBlock* freelist_ = nullptr;				// Указатель на первый свободный блок в списке.
+    size_t nextIndex_ = 0;						// Индекс следующего свободного блока.
+
+public:
+    PoolAllocator() {
+        //buffer_.at(0).next = nullptr;
+    }
+
+    ~PoolAllocator() {
+
+        while (freelist_ != nullptr) {
+            FreeBlock* block = freelist_;
+            freelist_ = freelist_->next;
+            block = nullptr;
+        }
+        for (size_t i = 0; i < nextIndex_; ++i) {
+            if (buffer_[i].next != nullptr) {
+                buffer_[i].~FreeBlock();
+                //FreeBlock* block = &buffer_[i];
+                //block->~FreeBlock();
+            }
+        }
+    }
+
+    T* allocate() {
+        if (freelist_) {
+            FreeBlock* block = freelist_;
+            freelist_ = freelist_->next;
+            return reinterpret_cast<T*>(block);
+        }
+        else if (nextIndex_ <= Capacity) {
+            FreeBlock* block = &buffer_[nextIndex_];
+            T* ptr = reinterpret_cast<T*>(block);
+            ++nextIndex_;
+            return ptr;
+        }
+        else
+            throw std::bad_alloc();
+    }
+
+    /*
+    T* allocate(size_t count = 1) {
+        if (count == 0 || count > Capacity)
+            throw std::bad_alloc();
+
+        else if (count == 1 && freelist_) {
+            FreeBlock* block = freelist_;
+            freelist_ = freelist_->next;
+            return reinterpret_cast<T*>(block);
+        }
+        else if (nextIndex_ + count <= Capacity) {
+            FreeBlock* block = &buffer_[nextIndex_];
+            T* ptr = reinterpret_cast<T*>(block);
+            nextIndex_ += count;
+            return ptr;
+            //TODO:: Можно реализовать счтчик пустых freelist_. Если кол-во freelist_ будет хватать то сделать reserve памяти
+            // чтобы несколько freelist_ встали рядом с друг другом.
+            // А может и нельзя так сделать т.к. указатели на все участки памяти будут невалидны. Надо подумать.
+        }
+        else
+            throw std::bad_alloc();
+    }*/
+
+
+    void deallocate(T* ptr, size_t count = 1) {
+        for (size_t i = 0; i < count; ++i) {
+            FreeBlock* block = reinterpret_cast<FreeBlock*>(ptr) + i;
+            block->next = freelist_;
+            freelist_ = block;
+        }
+        // Тут получается что освобождённые блоки записываются в freelist_ в обратном порядке. Это нужно исправить если реализовывать
+        // TODO с счтчик пустых freelist_ в allocate.
+    }
+
+    template <typename U, typename... Args>
+    void construct(U* ptr, Args&&... args) {
+        new (ptr) U(std::forward<Args>(args)...);
+    }
+
+    template <typename U>
+    void destroy(U* ptr) {
+        ptr->~U();
+    }
+
+    template<typename U, std::size_t capacity = Capacity>
+    PoolAllocator(PoolAllocator<U, capacity>) {}
+
+    template <typename U, std::size_t capacity = Capacity>
+    struct rebind {
+        using other = PoolAllocator<U, capacity>;
+    };
+};
+
+
+// list с std::allocator
+template <typename T>
+class list {
+    class BaseNode {
+    public:
+        BaseNode* next_ = nullptr;
+        BaseNode* previous_ = nullptr;
+        BaseNode() = default;
+    };
+
+    class Node : public BaseNode {
+    public:
+        T data_;
+        Node(const T data) : data_(data) {}
+    };
+
+    std::allocator<BaseNode> baseNodeAlloc_;
+    std::allocator<Node> nodeAlloc_;
+    BaseNode* fakeNode_ = nullptr;
+
+public:
+    list() {
+        fakeNode_ = baseNodeAlloc_.allocate(1);
+        fakeNode_->next_ = fakeNode_;
+        fakeNode_->previous_ = fakeNode_;
+    }
+
+    ~list() {
+        while (!empty())
+            pop_back();
+
+        baseNodeAlloc_.destroy(fakeNode_);
+        baseNodeAlloc_.deallocate(fakeNode_, 1);
+    }
+
+    void push_back(T data) {
+        Node* newNode = nodeAlloc_.allocate(1);
+        nodeAlloc_.construct(newNode, data);
+
+        //BaseNode* lastNode = fakeNode_->previous_;
+
+        newNode->next_ = fakeNode_;
+        newNode->previous_ = fakeNode_->previous_;
+        fakeNode_->previous_->next_ = newNode;
+        fakeNode_->previous_ = newNode;
+    }
+
+    void pop_back() {
+        if (empty()) return;
+
+        Node* lastNode = static_cast<Node*>(fakeNode_->previous_);
+        fakeNode_->previous_ = lastNode->previous_;
+        lastNode->previous_->next_ = fakeNode_;
+
+        nodeAlloc_.destroy(lastNode);
+        nodeAlloc_.deallocate(lastNode, 1);
+    }
+
+    void push_front(T data) {
+        Node* newNode = nodeAlloc_.allocate(1);
+        nodeAlloc_.construct(newNode, data);
+
+        newNode->next_ = fakeNode_->next_;
+        newNode->previous_ = fakeNode_;
+        fakeNode_->next_->previous_ = newNode;
+        fakeNode_->next_ = newNode;
+    }
+
+    void pop_front() {
+        if (empty()) return;
+
+        Node* firstNode = static_cast<Node*>(fakeNode_->next_);
+        fakeNode_->next_ = firstNode->next_;
+        fakeNode_->next_->previous_ = fakeNode_;
+
+        nodeAlloc_.destroy(firstNode);
+        nodeAlloc_.deallocate(firstNode, 1);
+    }
+
+    bool empty() const {
+        return fakeNode_->next_ == fakeNode_;
+    }
+};
+
+
+
+// list с поддержкой любого аллокатора
+template <typename T, typename Alloc = std::allocator<T>>
+class Mylist {
+    class BaseNode {
+    public:
+        BaseNode* next_ = nullptr;
+        BaseNode* previous_ = nullptr;
+        BaseNode() = default;
+    };
+
+    class Node : public BaseNode {
+    public:
+        T data_;
+        Node(const T data) : data_(data) {}
+    };
+
+    //std::allocator<BaseNode> baseNodeAlloc_;
+    typename Alloc::template rebind<BaseNode, 1>::other baseNodeAlloc_;
+    //std::allocator<Node> nodeAlloc_;
+    typename Alloc::template rebind<Node>::other nodeAlloc_;
+    BaseNode* fakeNode_ = nullptr;
+
+public:
+    Mylist() {
+        fakeNode_ = baseNodeAlloc_.allocate();
+        fakeNode_->next_ = fakeNode_;
+        fakeNode_->previous_ = fakeNode_;
+    }
+
+    ~Mylist() {
+        while (!empty())
+            pop_back();
+
+        baseNodeAlloc_.destroy(fakeNode_);
+        baseNodeAlloc_.deallocate(fakeNode_, 1);
+    }
+
+    void push_back(T data) {
+        Node* newNode = nodeAlloc_.allocate();
+        nodeAlloc_.construct(newNode, data);
+
+        //BaseNode* lastNode = fakeNode_->previous_;
+
+        newNode->next_ = fakeNode_;
+        newNode->previous_ = fakeNode_->previous_;
+        fakeNode_->previous_->next_ = newNode;
+        fakeNode_->previous_ = newNode;
+    }
+
+    void pop_back() {
+        if (empty()) return;
+
+        Node* lastNode = static_cast<Node*>(fakeNode_->previous_);
+        fakeNode_->previous_ = lastNode->previous_;
+        lastNode->previous_->next_ = fakeNode_;
+
+        nodeAlloc_.destroy(lastNode);
+        nodeAlloc_.deallocate(lastNode, 1);
+    }
+
+    void push_front(T data) {
+        Node* newNode = nodeAlloc_.allocate();
+        nodeAlloc_.construct(newNode, data);
+
+        newNode->next_ = fakeNode_->next_;
+        newNode->previous_ = fakeNode_;
+        fakeNode_->next_->previous_ = newNode;
+        fakeNode_->next_ = newNode;
+    }
+
+    void pop_front() {
+        if (empty()) return;
+
+        Node* firstNode = static_cast<Node*>(fakeNode_->next_);
+        fakeNode_->next_ = firstNode->next_;
+        fakeNode_->next_->previous_ = fakeNode_;
+
+        nodeAlloc_.destroy(firstNode);
+        nodeAlloc_.deallocate(firstNode, 1);
+    }
+
+    bool empty() const {
+        return fakeNode_->next_ == fakeNode_;
+    }
+};
+
+
+// list без аллокаторов
+template <typename T>
+class listLite {
+public:
+    class Node {
+    public:
+        T data_;
+        Node* next_ = nullptr;
+        Node* previous_ = nullptr;
+    };
+
+    Node* first_ = nullptr;
+    Node* last_ = first_;
+    size_t sz_ = 0;
+
+    listLite() = default;
+    ~listLite() {
+        clear();
+    }
+
+    void push_back(T new_data) {
+        if (first_ == nullptr) {
+            first_ = new Node();
+            first_->data_ = new_data;
+            ++sz_;
+            last_ = first_;
+        }
+        else {
+            Node* new_node = new Node();
+            new_node->data_ = new_data;
+            new_node->previous_ = last_;
+
+            last_->next_ = new_node;
+            last_ = last_->next_;
+            /*
+            Node* temp = first_;
+            while (temp->next_ != nullptr) {
+                temp = temp->next_;
+            }
+            temp->next_ = new_node;
+            */
+            ++sz_;
+        }
+    }
+    void push_front(T new_data) {
+        if (first_ == nullptr)
+            push_back(new_data);
+        else {
+            Node* new_node = new Node();
+            new_node->next_ = first_;
+            new_node->data_ = new_data;
+            first_->previous_ = new_node;
+            first_ = new_node;
+            ++sz_;
+        }
+    }
+    void pop_front() {
+        if (sz_ == 0)
+            return;
+        else if (sz_ == 1) {
+            delete first_;
+            first_ = nullptr;
+            last_ = first_;
+        }
+        else {
+            Node* second = first_->next_;
+            delete first_;
+            first_ = second;
+            first_->previous_ = nullptr;
+        }
+        --sz_;
+    }
+    void pop_back() {
+        if (sz_ == 0 || sz_ == 1)
+            pop_front();
+        else {
+            Node* penultimate = last_->previous_;
+            delete last_;
+            last_ = penultimate;
+            last_->next_ = nullptr;
+            --sz_;
+        }
+    }
+    void clear() {
+        Node* temp = first_;
+        Node* temp2 = first_;
+
+        while (temp != nullptr) {
+            temp2 = temp->next_;
+            delete temp;
+            temp = temp2;
+        }
+    }
+};
+
+
+
+int main() {
+    system("chcp 1251");
+
+    std::cout << "std::list" << '\n';
+    //constexpr size_t N = 10'000'000;
+    //constexpr size_t N = 8'500'0;
+    constexpr size_t N = 4'000'0;
+    double total = 0;
+
+    std::list<int> stdList;
+
+    // Засекаем время перед началом вставки
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        stdList.push_back(i);
+    }
+
+    // Засекаем время после окончания вставки
+    auto end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем время выполнения
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << "Время вставки push_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        stdList.pop_back();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_back
+    elapsed = end - start;
+    std::cout << "Время удаления pop_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        stdList.push_front(i);
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем push_front
+    elapsed = end - start;
+    std::cout << "Время удаления push_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        stdList.pop_front();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_front
+    elapsed = end - start;
+    std::cout << "Время удаления pop_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+    std::cout << "Общее время \"std::list\": " << total << '\n';
+
+
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+
+
+    std::cout << "\nМой list без аллокаторов" << '\n';
+    total = 0;
+
+    list<int> listLite;
+
+    // Засекаем время перед началом вставки
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        listLite.push_back(i);
+    }
+
+    // Засекаем время после окончания вставки
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем время выполнения
+    elapsed = end - start;
+    std::cout << "Время вставки push_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        listLite.pop_back();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_back
+    elapsed = end - start;
+    std::cout << "Время удаления pop_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        listLite.push_front(i);
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем push_front
+    elapsed = end - start;
+    std::cout << "Время удаления push_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        listLite.pop_front();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_front
+    elapsed = end - start;
+    std::cout << "Время удаления pop_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+    std::cout << "Общее время \"Мой list без аллокаторов\": " << total << '\n';
+
+
+
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+
+
+    std::cout << "\nМой list с std::allocator" << '\n';
+    total = 0;
+
+    list<int> myList1;
+
+    // Засекаем время перед началом вставки
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList1.push_back(i);
+    }
+
+    // Засекаем время после окончания вставки
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем время выполнения
+    elapsed = end - start;
+    std::cout << "Время вставки push_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList1.pop_back();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_back
+    elapsed = end - start;
+    std::cout << "Время удаления pop_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList1.push_front(i);
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем push_front
+    elapsed = end - start;
+    std::cout << "Время удаления push_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList1.pop_front();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_front
+    elapsed = end - start;
+    std::cout << "Время удаления pop_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+    std::cout << "Общее время \"Мой list с std::allocator\": " << total << '\n';
+
+
+
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+    ////////////////////////////////////////////////////////////////////////
+
+
+    std::cout << "\nМой list с моим PoolAllocator" << '\n';
+    total = 0;
+
+    Mylist<int, PoolAllocator<int, N>> myList;
+
+    // Засекаем время перед началом вставки
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList.push_back(i);
+    }
+
+    // Засекаем время после окончания вставки
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем время выполнения
+    elapsed = end - start;
+    std::cout << "Время вставки push_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList.pop_back();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_back
+    elapsed = end - start;
+    std::cout << "Время удаления pop_back " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList.push_front(i);
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем push_front
+    elapsed = end - start;
+    std::cout << "Время удаления push_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+
+    start = std::chrono::high_resolution_clock::now();
+
+    for (size_t i = 0; i < N; ++i) {
+        myList.pop_front();
+    }
+
+    end = std::chrono::high_resolution_clock::now();
+
+    // Вычисляем pop_front
+    elapsed = end - start;
+    std::cout << "Время удаления pop_front " << N << " элементов: "
+        << elapsed.count() << " секунд\n";
+    total += elapsed.count();
+
+    std::cout << "Общее время \"Мой list с моим PoolAllocator\": " << total << '\n';
+    system("pause");
+
+    return 0;
+}
