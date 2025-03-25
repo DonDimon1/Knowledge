@@ -1,0 +1,389 @@
+#include <iostream>
+#include <vector>
+#include <unordered_map>
+
+template < typename Key,
+    typename Value,
+    typename Hash = std::hash<Key>,
+    typename Equal = std::equal_to<Key>,
+    typename Allocator = std::allocator <std::pair <Key, Value>>>
+class unordered_map {
+
+private:
+    struct Node { //: public BaseNode
+        std::pair<Key, Value> data;
+        size_t hash_;
+        Node* next;
+        Node(Key& key, Value& value, size_t hash) : data{ key, value }, hash_(hash), next(nullptr) {}
+    };
+
+    typename Allocator::template rebind<Node>::other nodeAlloc_;
+
+    float load_factor_;
+    Node* firstNode = nullptr;
+    std::vector<Node*> vec_;
+    Hash hasher_;
+    size_t size_;
+
+
+    void rehash() {
+        size_t newCount = vec_.size() * 2;
+        std::vector<Node*> new_vec(newCount, nullptr);
+
+        Node* node = firstNode->next;
+        Node* previuosNode = firstNode;
+
+        while (node != firstNode) {
+            size_t index = hasher_(node->data.first) % newCount; 	// Вычисляем новый хеш
+
+            if (new_vec[index] == nullptr) {                        // Если ячейка свободна
+                new_vec[index] = previuosNode;                      // Сохраняем предыдущую ноду в новую ячейку.
+                node->hash_ = index;                                // Сохраняем новый хеш
+
+                previuosNode = node;
+                node = node->next;
+            }
+            else {                                                  // В случае коллизии
+                Node* conflictNode = new_vec[index];                // Достаём ноду из ячейки
+                if (conflictNode == previuosNode) {                 // Если конфликт с предыдущей нодой
+                    node->hash_ = index;                            // Просто продолжаем алгоритм как будто коллизии нет
+
+                    previuosNode = node;
+                    node = node->next;
+                }
+                else {
+                    Node* nextNode = node->next;					// Сохраняем следующую ноду для продолжения алгоритма
+                    node->next = conflictNode->next;				// Ставим в цепочку нашу ноду
+                    conflictNode->next = node;						// Ставим в цепочку нашу ноду
+                    node->hash_ = index;							// Сохраняем новый хеш
+
+                    node = nextNode;								// Продолжаем наш алгоритм
+                    previuosNode->next = node;						// Продолжаем наш алгоритм
+                }
+            }
+        }
+        vec_.swap(new_vec);                                         // Обмениваем содержимое (Это не копирование, это обмен указателями)
+    }
+
+public:
+
+    template <typename T>
+    class base_iterator {
+    protected:
+        typename std::vector<Node*>::iterator vecIter;					// Итератор на текущую ячейку вектора
+        typename std::vector<Node*>::iterator vecIterEnd;               // Итератор на конец вектора
+
+        T node_;
+        // Нам нужно передвигаться по вектору а не по листу
+        // А также нам нужно учитывать коллизии
+        // Итераторы для типов std::forward_list, std::unordered_set и std::unordered_map не поддерживают операции --, -= и -.
+        // (поскольку std::forward_list - однонаправленный список, где каждый элемент хранит указатель только на следующий элемент)
+        void move_to_next() {
+            Node* current = node_->next;                // Получаем текущую ноду
+            size_t hash = current->hash_;               // Получаем текущий хеш
+
+            if (current->next == firstNode) {           // Если следующая нода это фейкнода
+                node_ = firstNode;                      // То теперь итератор будет указывать на фейкноду
+            }
+            else if (current->next->hash_ == hash) {    // Если у следующей ноды такой же хеш
+                node_ = current;
+            }
+            else {							            // Если бакет закончился
+                while (++vecIter != vecIterEnd) {       // Ищем следующий не пустую ячейку
+                    if (*vecIter) {                     // Если ячейка непустая
+                        node_ = *vecIter;
+                        return;
+                    }
+                }
+            }
+        }
+
+    public:
+        base_iterator(T node, typename std::vector<Node*>::iterator b_it, typename std::vector<Node*>::iterator b_end):
+            node_(node), vecIter(b_it), vecIterEnd(b_end){}
+
+        //std::pair<const Key, Value>& operator*() { return node_->next->data; }
+        //std::pair<const Key, Value>* operator->() { return &(node_->next->data); }
+
+        //auto operator*() const -> decltype(node_->next->data)& {return node_->next->data; }
+        //auto operator->() const -> decltype(&(node_->next->data)) {return &(node_->next->data);}
+
+        auto& operator*() { return node_->next->data; }
+        auto* operator->() { return &(node_->next->data); }
+
+
+        base_iterator& operator++() {
+            move_to_next();
+            return *this;
+        }
+
+        bool operator==(const base_iterator& other) const {
+            return other.node_->next == node_->next;
+        }
+
+        bool operator!=(const base_iterator& other) const {
+            return !(other == *this);
+        }
+    };
+
+    class iterator : public base_iterator<Node*> {
+    public:
+        using base_iterator<Node*>::base_iterator;
+    };
+
+    class const_iterator : public base_iterator<const Node*> {
+    public:
+        using base_iterator<const Node*>::base_iterator;
+    };
+
+
+    unordered_map(size_t bucket_count = 16, float load_factor = 0.75) :
+        vec_(bucket_count, nullptr), load_factor_(load_factor), size_(0) {
+        firstNode = nodeAlloc_.allocate(1);
+        firstNode->next = firstNode;
+    };
+
+    ~unordered_map() {
+        clear();
+    }
+
+    iterator begin() {
+        for(auto it = vec_.begin(); it != vec_.end(); ++it) {
+            if(*it)
+                return iterator(*it, it, vec_.end());
+        }
+        return end();
+    }
+
+    iterator end() {
+        return iterator(nullptr, vec_.end(), vec_.end());
+    }
+
+    const_iterator begin() const {
+        for(auto it = vec_.begin(); it != vec_.end(); ++it) {
+            if(*it)
+                return const_iterator(*it, it, vec_.end());
+        }
+        return end();
+    }
+
+    const_iterator end() const {
+        return const_iterator(nullptr, vec_.end(), vec_.end());
+    }
+
+
+
+    Value* find(const Key& key) {       // Возвращает iterator
+        size_t index = hasher_(key) % vec_.size();
+        Node* node = vec_[index];
+
+        if (node) {
+            node = node->next;
+            while (node->hash_ == index) {
+                if (Equal{}(node->data.first, key)) {
+                    return &node->data.second;
+                }
+                node = node->next;
+
+                if (node == firstNode)
+                    return nullptr;
+            }
+        }
+        return nullptr;
+    }
+
+    void insert(Key key, Value value) {
+        size_t index = hasher_(key) % vec_.size();
+
+        Node* newNode = nullptr;
+        try {
+            newNode = nodeAlloc_.allocate(1);
+            nodeAlloc_.construct(newNode, key, value, index);
+        }
+        catch (const std::bad_alloc& e) {
+			std::cerr << "Ошибка аллокатора в методе insert: " << e.what() << std::endl;
+			throw;
+		}
+		catch (const std::exception& e) {
+            std::cerr << "Ошибка конструктора в методе insert: " << e.what() << std::endl;
+            try {
+                nodeAlloc_.deallocate(newNode, 1);
+            }
+            catch (...) {
+                std::cerr << "Ошибка аллокатора в методе deallocate(newNode, 1): " << e.what() << std::endl;
+                std::terminate();
+            }
+            throw;
+		}
+
+        // Решаем коллизию
+        Node* node = vec_[index];
+        if (node) {
+            std::cout << "Conflict " << key << '\n';
+            node = node->next;
+            while (node->hash_ == index) {              // Проходим по всем коллизиям. Если хеш поменялся значит мы вышли из бакета
+                if (node->data.first == key) {          // Если мы нашли такой же ключ
+                    node->data.second = value;          // то просто меняем значение.
+                    return;
+                }
+                node = node->next;
+
+                if (node == firstNode)                  // Проверка на fakeNode
+                    return;
+            }
+            newNode->next = node->next;                 // Ставим новую ноду на последнее место в бакете
+            node->next = newNode;
+        }
+        else {                                          // Если это первый элемент в бакете
+            std::cout << "New " << key << '\n';
+            if (size_ == 0) {                           // Если это вообще первый элемент
+                vec_[index] = firstNode;                // Указатель на нашу ноду смещён на один влево (см. реализацию std::unordered_map)
+                firstNode->next = newNode;
+                newNode->next = firstNode;              // Зацикливаем лист
+            }
+            else {
+                size_t oldHash = firstNode->next->hash_;// Берем старый хеш
+                Node* oldNode = vec_[oldHash]->next;    // Находим старую ноду по этому хешу
+                vec_[oldHash] = newNode;                // Старая ячейка теперь будет указывать на нашу новую ноду
+                vec_[index] = firstNode;                // Новая ячейка будет указывать на фейк ноду
+                firstNode->next = newNode;              // Фейк нода будет указывать на нашу новую ноду
+                newNode->next = oldNode;                // Новая нода будет указывать на старую ноду
+            }
+
+        }
+        ++size_;
+
+        if (size_ > load_factor_ * vec_.size()) {
+            rehash();
+        }
+    }
+
+    void erase(const Key& key) {// Принимает итератор
+        size_t index = hasher_(key) % vec_.size();
+        Node* previuosNode = vec_[index];
+        size_t num = 0;
+
+        if (previuosNode) {									// Если нода не пустая
+            Node* node = previuosNode->next;
+            while (node->hash_ == index) {					// Идём по бакету
+                if (Equal{}(node->data.first, key)) {		// Сравнение ключей
+
+                    Node* nextNode = node->next;			// Следующая нода
+
+                    if (nextNode == firstNode) { 			// Проверка следующей ноды на фейкноду
+                        previuosNode->next = nextNode;		// Удаляем из листа нашу ноду
+                        if (num == 0)						// Если в нашем бакете всего 1 элемент
+                            vec_[index] = nullptr;			// Удаляем ссылку на него из вектора
+                    }
+                    else if (nextNode->hash_ != index) {	// Если мы удаляем последний элемент бакета, но следующая нода это не фейкнода
+                        size_t hash = nextNode->hash_;		// Получаем хеш ячейки вектора следующего бакета
+                        vec_[hash] = previuosNode;			// Указываем этой ячейке на новую ноду
+                        previuosNode->next = nextNode;		// Удаляем из листа нашу ноду
+                        if (num == 0)						// Если в нашем бакете всего 1 элемент
+                            vec_[index] = nullptr;			// Удаляем ссылку на него из вектора
+                    }
+                    else {
+                        previuosNode->next = nextNode;		// Удаляем из листа нашу ноду
+                    }
+
+                    // Очищаем память программы
+                    try {
+                        nodeAlloc_.destroy(node);
+                    }
+                    catch (...) {
+                        std::cerr << "Ошибка аллокатора в методе destroy(node). " << std::endl;
+                        std::terminate();
+                    }
+
+                    try {
+                        nodeAlloc_.deallocate(node, 1);
+                    }
+                    catch (...) {
+                        std::cerr << "Ошибка аллокатора в методе deallocate(newNode, 1). " << std::endl;
+                        std::terminate();
+                    }
+
+                    --size_;
+                    return;
+                }
+                previuosNode = node;
+                node = node->next;
+                ++num;
+            }
+        }
+        return;
+    }
+
+    void clear() {
+        Node* node = firstNode->next;
+
+        while (node != firstNode) {
+            Node* next = node->next;
+
+            // Очищаем память программы
+            try {
+                nodeAlloc_.destroy(node);
+            }
+            catch (...) {
+                std::cerr << "Ошибка аллокатора в методе destroy(node). " << std::endl;
+                std::terminate();
+            }
+
+            try {
+                nodeAlloc_.deallocate(node, 1);
+            }
+            catch (...) {
+                std::cerr << "Ошибка аллокатора в методе deallocate(newNode, 1). " << std::endl;
+                std::terminate();
+            }
+
+            node = next;
+        }
+
+        size_ = 0;
+        firstNode->next = firstNode;
+
+        // Очищаем вектор и устанавливаем ему стандартный размер
+        std::vector<Node*> empty_buckets(5, nullptr);
+        vec_.swap(empty_buckets);
+    }
+
+    size_t size() {
+        return size_;
+    }
+};
+
+
+
+int main() {
+    //std::unordered_map<std::string, int> um();
+    unordered_map<std::string, int> myUM;
+    myUM.insert("0", 16);
+    myUM.insert("1", 1);
+    /*myUM.insert("2", 2);
+    myUM.insert("3", 3);
+    myUM.insert("4", 4);
+    myUM.insert("5", 5);
+    myUM.insert("6", 6);
+    myUM.insert("7", 7);
+    myUM.insert("8", 8);
+    myUM.insert("9", 9);
+    myUM.insert("10", 10);
+    myUM.insert("11", 11);
+    myUM.insert("12", 12);
+    myUM.insert("13", 13);
+    myUM.insert("14", 14);
+    myUM.insert("15", 15);
+    myUM.insert("16", 16);
+    myUM.insert("17", 17);*/
+
+    unordered_map<std::string, int>::iterator it = myUM.begin();
+    std::pair<std::string, int> temp = *it;
+    //unordered_map<std::string, int>::iterator t("2");
+    /*
+    std::allocator<int> alloc1;
+    int* g = alloc1.allocate(1);
+    alloc1.construct(g)*/
+    system("pause");
+    return 0;
+}

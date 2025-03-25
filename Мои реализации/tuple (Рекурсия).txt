@@ -1,0 +1,80 @@
+// Две немного разные рекурсивные реализации tuple
+// Chat GPT говорит что первая реализация лучше, поскольку там используется наследование и из-за этого будет работать EBO, а во второй реализации наследования нет, и мы храним хвост как отдельный объект. Однако в первой реализации
+// присутствует static_cast, который тоже нужно учитывать.
+
+// 1) Реализация (Наследование)
+#include <iostream>
+
+template <typename... Types>				// Определение
+class tuple;
+
+template<>						// Специализация для пустого tuple
+class tuple<> {};
+
+template <typename Head, typename... Tail>		// Основная специализация c одним обязательным параметром
+struct tuple<Head, Tail...>: public tuple<Tail...> {
+	Head head_;
+
+	constexpr tuple(Head head, Tail... tail) : tuple<Tail...>(tail...), head_(head) {}
+};
+
+template <size_t N, typename Head, typename... Tail>
+decltype(auto) get(tuple<Head, Tail...>& t) {
+	if constexpr (N == 0)
+		return t.head_;
+	else {
+		return get<N - 1>(static_cast<tuple<Tail...>&>(t));
+	}	
+}
+
+
+
+// 2) Реализация (Без наследования)
+
+#include <iostream>
+
+template <typename... Types>				// Определение
+class tuple;
+
+template<>						// Специализация для пустого tuple
+class tuple<> {};
+
+template <typename Head, typename... Tail>		// Основная специализация c одним обязательным параметром
+struct tuple<Head, Tail...>: public tuple<Tail...> {
+	Head head_;
+	tuple<Tail...> tail_;
+
+	constexpr tuple(Head head, Tail... tail) : tail_(tail...), head_(head) {}
+};
+
+
+template <size_t N, typename... Types>
+decltype(auto) get(tuple<Types...>& t) {
+	if constexpr (N == 0)
+		return t.head_;
+	else
+		return get<N-1>(t.tail_);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

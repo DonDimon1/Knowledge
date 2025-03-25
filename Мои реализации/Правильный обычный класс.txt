@@ -1,0 +1,24 @@
+struct S {
+	std::string str;
+	int i;
+
+	S(const std::string& str, int i): str(str), i(i) {}
+	S(std::string&& str, int i): str(std::move(str)), i(i) {}
+
+	S& operator=(const S& other) {
+		if (this != &other) { 
+			str = other.str;
+			i = other.i;
+		}
+		return *this;
+	}
+	S& operator=(S&& other) noexcept {
+		if (this != &other) { 
+			str = std::move(other.str);
+			i = other.i; 
+		}
+		return *this;
+	}
+
+	~S() = default;
+};

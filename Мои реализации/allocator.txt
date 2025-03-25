@@ -11,7 +11,7 @@ struct allocator {
 	}
 
 	template <typename U, typename... Args>
-	void construct(U* ptr, const Args&... args) {		
+	void construct(U* ptr, Args&&... args) {		// По поводу Args&& см. семантику перемещений		
 		new (ptr) U(args...);				
 	}							
 
