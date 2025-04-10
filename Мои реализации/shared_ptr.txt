@@ -1,0 +1,390 @@
+// ОТСЛЕЖИВАНИЕ УТЕЧЕК ПАМЯТИ
+#define _CRTDBG_MAP_ALLOC
+#include <cstdlib>
+#include <crtdbg.h>
+
+
+#include <iostream>
+#include <memory>
+
+// Классы для тестирования
+struct Array {
+	int* p;
+	Array(int i) : p(new int[1000] {i}) {}
+	~Array() {
+		delete[] p;
+	}
+};
+
+template <typename T>
+struct CustomDeleter {
+	void operator()(T* ptr) const {
+		std::cout << "CustomDeleter" << '\n';
+		delete ptr;
+	};
+};
+
+template <typename T>
+struct CustomAllocator {
+	using value_type = T;
+
+	CustomAllocator() = default;
+	template <typename U>
+	CustomAllocator(const CustomAllocator<U>&) noexcept {}
+
+	[[nodiscard]] T* allocate(std::size_t n) {
+		if (n > std::allocator_traits<std::allocator<T>>::max_size(std::allocator<T>{})) {
+			throw std::bad_alloc();
+		}
+		std::cout << "Allocating " << n << " objects of size " << sizeof(T) << "\n";
+		return static_cast<T*>(::operator new(n * sizeof(T)));
+	}
+
+	void deallocate(T* p, std::size_t n) noexcept {
+		std::cout << "Deallocating " << n << " objects of size " << sizeof(T) << "\n";
+		::operator delete(p);
+	}
+
+	template <typename U, typename... Args>
+	void construct(U* p, Args&&... args) {
+		std::cout << "Constructing object at " << p << "\n";
+		::new (static_cast<void*>(p)) U(std::forward<Args>(args)...);
+	}
+
+	template <typename U>
+	void destroy(U* p) {
+		std::cout << "Destroying object at " << p << "\n";
+		p->~U();
+	}
+
+	template <typename U>
+	struct rebind {
+		using other = CustomAllocator<U>;
+	};
+
+	template <typename U>
+	using rebind_alloc = CustomAllocator<U>;
+
+	template <typename U>
+	bool operator==(const CustomAllocator<U>&) const noexcept { return true; }
+	template <typename U>
+	bool operator!=(const CustomAllocator<U>&) const noexcept { return false; }
+};
+
+
+
+// Класс shared_ptr
+template <typename T>
+class shared_ptr {
+
+	template <typename U, typename Alloc, typename... Args>
+	friend shared_ptr<U> make_shared(Args&&... args);
+
+	template <typename U, typename Alloc, typename... Args>
+	friend shared_ptr<U> allocate_shared_my(const Alloc&, Args&&... args);
+
+	struct BaseControlBlock {
+		size_t shared_count;	//TODO:: м.б. инициализировать поля надо тут?
+		size_t weak_count;
+
+		BaseControlBlock() : shared_count(0), weak_count(0) {}
+
+		BaseControlBlock(size_t shared, size_t weak)
+			: shared_count(shared), weak_count(weak) {
+		}
+
+		virtual ~BaseControlBlock() = 0;
+		virtual void destroy_object() = 0;
+		virtual void destroy_self() = 0;
+	};
+
+	template < typename U, typename Deleter, typename Alloc>
+		struct ControlBlockRegular : public BaseControlBlock {
+		U* ptr;
+		Deleter del;
+		Alloc alloc;
+
+		ControlBlockRegular(U* ptr, const Deleter& del, const Alloc& alloc, size_t shared_count, size_t weak_count) :
+			BaseControlBlock(shared_count, weak_count), ptr(ptr), del(del), alloc(alloc) {
+		}
+
+		~ControlBlockRegular() override = default;
+
+		void destroy_object() override {
+			del(ptr);					// При shared_count == 0 удаляем объект.
+			ptr = nullptr;				// TODO Нужна ли проверка на nullptr перед del?
+		}
+
+		void destroy_self() override {
+			using BlockAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<ControlBlockRegular>;
+			BlockAlloc block_alloc = alloc; 
+			//Alloc copy = alloc;
+			std::allocator_traits<BlockAlloc>::destroy(block_alloc, this);
+			std::allocator_traits<BlockAlloc>::deallocate(block_alloc, this, 1);
+
+			//using BlockAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<ControlBlockRegular<U, Deleter, Alloc>>;
+			//BlockAlloc ba = alloc;
+			//std::allocator_traits<BlockAlloc>::destroy(ba, this); //TODO: Можно ли так делать?
+			//std::allocator_traits<BlockAlloc>::deallocate(ba, this, 1);
+			
+			//ba.deallocate(this, 1); //TODO: Можно ли так делать? TODO: здесь ошибка
+
+			//using ReboundBaseAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<BaseControlBlock>;
+			//ReboundBaseAlloc baseAlloc = alloc;
+			//std::allocator_traits<ReboundBaseAlloc>::destroy(baseAlloc, this);
+
+			//cb = baseAlloc.allocate(1);
+			//std::allocator_traits<ReboundBaseAlloc>::construct
+		}
+	};
+
+	template < typename U, typename Alloc>
+	struct ControlBlockMakeShared : public BaseControlBlock {
+		//U value;	// Если оставить так, то не получится управлять памятью с помощью аллокатора
+		alignas(T) unsigned char storage[sizeof(T)];
+		Alloc alloc_;
+
+		T* get_ptr() { return reinterpret_cast<T*>(&storage); }
+
+		template <typename... Args>
+		ControlBlockMakeShared(size_t shared_count, size_t weak_count, const Alloc& alloc, Args&&... args):
+				BaseControlBlock(shared_count, weak_count), alloc_(alloc) {
+			std::allocator_traits<Alloc>::construct(alloc_, get_ptr(), std::forward<Args>(args)...);
+			//std::cout << sizeof(T) << '\n';
+		}
+
+		/*
+		template <typename CustomAlloc, typename... Args>
+		ControlBlockMakeShared(size_t shared_count, size_t weak_count, CustomAlloc& alloc, Args&&... args) :
+			BaseControlBlock(shared_count, weak_count), value(std::forward<Args>(args)...), alloc(alloc) {
+		}*/
+
+
+		//ControlBlockMakeShared(U& value): value(value) {}
+		~ControlBlockMakeShared() = default;
+
+		//TODO: Нужно написать с поддержкой аллокаторов
+		void destroy_object() override {
+			//value.~U();   // Двойное удаление
+			std::allocator_traits<Alloc>::destroy(alloc_, get_ptr());
+		};
+		void destroy_self() override {
+			using BlockAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<typename shared_ptr<T>::template ControlBlockMakeShared<T, Alloc>>;
+			BlockAlloc ba = alloc_;
+			std::allocator_traits<BlockAlloc>::destroy(ba, this); //TODO: Можно ли так делать?
+			std::allocator_traits<BlockAlloc>::deallocate(ba, this, 1);
+			//ba.deallocate(this, 1); //TODO: Можно ли так делать? TODO: здесь ошибка
+
+			//delete this;
+			//std::allocator_traits<Alloc>::destroy(alloc, this);
+			//alloc.deallocate(this, 1);
+			//std::allocator_traits<Alloc>::deallocate(alloc, this, 1);
+
+		};
+	};
+
+	T* ptr;				// = nullptr
+	BaseControlBlock* cb;
+
+	//template <typename Alloc>
+	//shared_ptr(ControlBlockMakeShared<T, Alloc>* cb) : ptr(&cb->value), cb(cb) {} //TODO: проверить правильно ли &cb->value
+	template <typename Alloc>
+	shared_ptr(ControlBlockMakeShared<T, Alloc>* cb) : ptr(cb->get_ptr()), cb(cb) {} //TODO: проверить правильно ли &cb->value
+	//TODO: это работает только при создании, при копировании нужно сначала очищать
+
+
+public:
+	shared_ptr() : ptr(nullptr), cb(nullptr) {}
+
+	template < typename Y,
+	typename Deleter = std::default_delete<Y>,
+	typename Alloc = std::allocator<Y>>
+	shared_ptr(Y* ptr, Deleter del = Deleter(), Alloc alloc = Alloc()) : ptr(ptr) {
+		
+		using Block = ControlBlockRegular<Y, Deleter, Alloc>;
+		using BlockAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<Block>;
+		
+		BlockAlloc block_alloc = alloc;
+		Block* block = nullptr;
+
+		// Тут надо оборачивать в try
+		block = std::allocator_traits<BlockAlloc>::allocate(block_alloc, 1);
+		std::allocator_traits<BlockAlloc>::construct(block_alloc, block, ptr, del, alloc, 1, 0);
+
+		cb = block;
+
+		/*
+		using ReboundBaseAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<BaseControlBlock>;
+
+		ReboundBaseAlloc baseAlloc;
+		cb = baseAlloc.allocate(1);
+
+		std::allocator_traits<ReboundBaseAlloc>::construct(
+			baseAlloc,
+			reinterpret_cast<ControlBlockRegular<Y, Deleter, Alloc>*>(cb),
+			ptr,
+			del,
+			alloc,  //TODO: наверное нужно передавать baseAlloc
+			1,
+			0
+		);*/
+	}
+
+	~shared_ptr() {
+		release();
+	}
+
+	shared_ptr(const shared_ptr& other) : ptr(other.ptr), cb(other.cb) {
+		++cb->BaseControlBlock::shared_count;
+	}
+
+	shared_ptr& operator=(const shared_ptr& other) {
+		if (this != &other) {
+			release();
+
+			cb = other.cb;
+			ptr = other.ptr;
+			++cb->BaseControlBlock::shared_count;
+		}
+		return *this;
+	}
+
+	void release() {
+		if (cb) {
+			--cb->shared_count;
+			if (ptr && cb->shared_count == 0) {
+				cb->destroy_object();
+			}
+			if (cb->shared_count == 0 && cb->weak_count == 0) {
+				cb->destroy_self();          //TODO нет destroy. Возможно нужно будет получить аллокатор и потом уже удалять
+				//cb = nullptr;
+			}
+			ptr = nullptr;
+			cb = nullptr;
+		}
+	}
+
+	size_t use_count() const {
+		return cb ? cb->shared_count : 0;
+	}
+
+	T& operator*() const { return *ptr; }
+	T* operator->() const { return ptr; }
+	T* get() const { return ptr; }
+};
+
+template <typename T>
+shared_ptr<T>::BaseControlBlock::~BaseControlBlock() {}
+
+
+template <typename T, typename Alloc = std::allocator<T>, typename... Args>
+shared_ptr<T> make_shared(Args&&... args) {
+	using Block = typename shared_ptr<T>::template ControlBlockMakeShared<T, Alloc>;
+	using BlockAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<Block>;
+	
+	BlockAlloc alloc;
+	Block* block = std::allocator_traits<BlockAlloc>::allocate(alloc, 1);
+	std::allocator_traits<BlockAlloc>::construct(alloc, block, 1, 0, alloc, std::forward<Args>(args)...);
+	return shared_ptr<T>(block);
+
+	/*
+	typename shared_ptr<T>::template ControlBlockMakeShared<T>* cb =
+		new typename shared_ptr<T>::template ControlBlockMakeShared<T>(1, 0, std::forward<Args>(args)...); // Создаём контрол блок с объектом
+	return shared_ptr<T>(cb);*/
+}
+
+template <typename T, typename Alloc, typename... Args>
+shared_ptr<T> allocate_shared_my(const Alloc& alloc, Args&&... args) {
+
+	using ReboundAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<typename shared_ptr<T>::template ControlBlockMakeShared<T, Alloc>>;
+	ReboundAlloc rebAlloc = alloc;
+	auto* cb = rebAlloc.allocate(1);
+	std::allocator_traits<ReboundAlloc>::construct(
+		rebAlloc,
+		cb,
+		1,
+		0,
+		alloc, //TODO: наверное нужно передавать rebAlloc
+		std::forward<Args>(args)...
+	);
+	return shared_ptr<T>(cb);
+
+	/*
+	using ReboundBaseAlloc = typename std::allocator_traits<Alloc>::template rebind_alloc<BaseControlBlock>;
+
+		ReboundBaseAlloc baseAlloc;
+		cb = baseAlloc.allocate(1);
+
+		std::allocator_traits<ReboundBaseAlloc>::construct(
+			baseAlloc,
+			reinterpret_cast<ControlBlockRegular<Y, Deleter, Alloc>*>(cb),
+			ptr,
+			del,
+			alloc,  //TODO: наверное нужно передавать baseAlloc
+			1,
+			0
+		);*/
+		//typename shared_ptr<T>::template ControlBlockMakeShared<T, Alloc>* cb =
+		//    new typename shared_ptr<T>::template ControlBlockMakeShared<T, Alloc>(1, 0, std::forward<Args>(args)...);
+}
+
+
+int main() {
+	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);	// Отслеживание утечек памяти
+	//_CrtSetBreakAlloc(82);
+
+
+	{ // Конструктор по умолчанию
+		shared_ptr<Array> sp;
+	}
+	{ // Обычный конструктор
+		Array* pa = new Array(65);
+		shared_ptr<Array> sp(pa);
+	}
+	{ // Конструктор + CustomDeleter
+		Array* pa = new Array(65);
+		CustomDeleter<Array> del;
+		shared_ptr<Array> sp(pa, del);
+	}
+	{ // Конструктор + CustomDeleter + CustumAllocator
+		Array* pa = new Array(65);
+		CustomDeleter<Array> del;
+		std::allocator<Array> alloc;
+		std::cout << "sizeof(Array* pa) " << sizeof(pa) << '\n'; //TODO: он показывает 8 т.е. указатель
+		shared_ptr<Array> sp(pa, del, alloc);
+	}
+	{ // Создание make_shared
+		shared_ptr<Array> sp = make_shared<Array>(65);
+	}
+	{ // Создание обычным конструктором и создание копированием shared_ptr
+		Array* pa = new Array(65);
+		shared_ptr<Array> sp(pa);
+		shared_ptr<Array> sp2(sp);
+	}
+	{ // Создание make_shared и создание копированием shared_ptr
+		shared_ptr<Array> sp = make_shared<Array>(65);
+		shared_ptr<Array> sp2(sp);
+	}
+	{ // Создание обычным конструктором, создание make_shared, присваивание первому указателю второго
+		Array* pa = new Array(65);
+		shared_ptr<Array> sp(pa);
+		shared_ptr<Array> sp2 = make_shared<Array>(56);
+		sp = sp2;
+	}
+	{ // Создание обычным конструктором, создание make_shared, присваивание второму указателю первому
+		Array* pa = new Array(65);
+		shared_ptr<Array> sp(pa);
+		shared_ptr<Array> sp2 = make_shared<Array>(56);
+		sp2 = sp;
+	}
+	{ // Создание allocate_shared c std::allocator
+		std::allocator<Array> alloc;
+		shared_ptr<Array> sp = allocate_shared_my<Array>(alloc, 65);
+	}
+	{ // Создание allocate_shared c CustomAllocator
+		CustomAllocator<Array> alloc;
+		shared_ptr<Array> sp = allocate_shared_my<Array>(alloc, 65);
+	}
+	// TODO:: надо написать деструктор, потом все конструкторы для ControlBlockRegular, потом make_shared, потом все конструкторы для ControlBlockMakeShared, потом посмотри фотки там что-то есть.
+	// TODO: В контрол блоках мы пишем соответствуюущие конструкторы, мы также делаем виртуальные функции getCopy() для создания копий этих контрол блоков, мы также поддерживаем мув контрол блока и т.д.
+}

@@ -1,0 +1,67 @@
+#include <iostream>
+
+class any {
+private:
+    template <typename T>
+    friend T any_cast(any&);
+
+	struct Base {
+		virtual ~Base() = 0;
+		virtual Base* getCopy() const = 0;
+	};
+
+	template <typename T>
+	struct Derived : public Base {
+		T value;
+		Derived(const T& value) : value(value) {}
+		Derived(T&& value) : value(std::move(value)) {}
+		~Derived() override = default;
+
+		Base* getCopy() const override {
+            		return new Derived(value);
+		}
+	};
+
+	Base* ptr;
+
+public:
+
+	template <typename T>
+	any(const T& value): ptr(new Derived<T>(value)) {}
+
+	template <typename T>
+	any& operator=(const T& value) {
+        	delete ptr;
+        	ptr = new Derived<T>(value);
+        	return *this;
+	}
+
+	any(const any& other): ptr(other.ptr->getCopy()){}
+
+	~any() {
+		delete ptr;
+	}
+};
+
+// Определение чисто виртуального деструктора
+any::Base::~Base() {}
+
+
+template <typename T>
+T any_cast(any& a) {
+    auto* p = dynamic_cast<any::Derived<std::remove_reference_t<T>>*>(a.ptr);
+    if(!p)
+        throw std::bad_cast(); //std::bad_any_cast()
+    else
+        return p->value;
+}
+
+
+
+int main() {
+	any f = 5;
+	f = 'c';
+	f = 3.14;
+
+	std::cout << any_cast<double&>(f) << '\n';
+}
