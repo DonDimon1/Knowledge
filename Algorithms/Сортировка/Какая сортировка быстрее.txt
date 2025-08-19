@@ -1,0 +1,1136 @@
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <map>
+#include <future>
+#include <algorithm>
+#include <float.h>
+
+
+constexpr void Checker(int* arr, int size, const std::string& nameSort) {
+    for (int i = 0; i < size - 1; ++i) {
+        if (arr[i] > arr[i + 1]) {
+            std::cout << "Проверка провалилась!\n";
+            std::cout << nameSort;
+            std::cout << "i = " << i << ". arr[i] = " << arr[i] << ", arr[i + 1] = " << arr[i + 1] << '\n';
+            exit(0);
+        }
+    }
+}
+
+void BubbleSort(int* arr, int size) {
+    for (int i = 0; i < size; ++i) {
+        bool flag = true;
+        for (int j = 0; j < size - i - 1; ++j) {
+            if (arr[j] > arr[j + 1]) {
+                flag = false;
+
+                //std::swap(arr[j], arr[j + 1]);
+
+                int temp = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = temp;
+            }
+        }
+        if (flag)
+            return;
+    }
+}
+void CocktailSort(int* arr, int size) {
+    int left = 0;
+    int right = size - 1;
+    int lastSwap = 0;
+
+    while (left < right) {
+        for (int i = left; i < right; ++i) {
+            if (arr[i] > arr[i + 1]) {
+                int temp = arr[i];
+                arr[i] = arr[i + 1];
+                arr[i + 1] = temp;
+
+                //std::swap(arr[i], arr[i + 1]);
+                lastSwap = i;
+            }
+        }
+        right = lastSwap;
+
+        for (int i = right; i > left; --i) {
+            if (arr[i] < arr[i - 1]) {
+                int temp = arr[i];
+                arr[i] = arr[i - 1];
+                arr[i - 1] = temp;
+
+                //std::swap(arr[i], arr[i - 1]);
+                lastSwap = i;
+            }
+        }
+        left = lastSwap;
+    }
+}
+// getNextGap нужна чтобы найти зазор между элементами
+int CombSort_getNextGap(int gap)
+{
+    // Уменьшение зазора с помощью фактора уменьшения
+    gap = (gap * 10) / 13;
+
+    if (gap < 1)
+        return 1;
+    return gap;
+}
+void CombSort(int* arr, int size) {
+    // Инициализация зазора
+    int gap = size;
+
+    // Инициализируйте swapped как true, чтобы убедиться, что цикл выполняется
+    bool swapped = true;
+
+    // Продолжайте выполнение, пока разрыв больше 1 и пока последняя итерация вызвала подмену
+    while (gap != 1 || swapped == true)
+    {
+        // Найдите следующий зазора
+        gap = CombSort_getNextGap(gap);
+
+        // Инициализируйте swapped как false, чтобы мы могли проверить, произошла ли подмена или нет
+        swapped = false;
+
+        // Сравните все элементы с текущим зазором
+        for (int i = 0; i < size - gap; i++)
+        {
+            if (arr[i] > arr[i + gap])
+            {
+                //std::swap(arr[i], arr[i + gap]);
+                int temp = arr[i];
+                arr[i] = arr[i + gap];
+                arr[i + gap] = temp;
+
+                swapped = true;
+            }
+        }
+    }
+}
+void SelectionSort(int* arr, int size) {
+    for (int i = 0; i < size - 1; ++i) {
+        int minIndex = i;
+        for (int j = i + 1; j < size; ++j) {
+            if (arr[j] < arr[minIndex])
+                minIndex = j;
+        }
+        int temp = arr[minIndex];
+        arr[minIndex] = arr[i];
+        arr[i] = temp;
+    }
+}
+// Функция для нахождения максимального и минимального элементов из массива.
+void BingoSort_maxMin(int* arr, int n, int& bingo, int& nextBingo) {
+    for (int i = 1; i < n; bingo = std::min(bingo, arr[i]), nextBingo = std::max(nextBingo, arr[i]), ++i);
+}
+
+void BingoSort(int* arr, int size) {
+    int bingo = arr[0];
+    int nextBingo = arr[0];
+    BingoSort_maxMin(arr, size, bingo, nextBingo);
+    int largestEle = nextBingo;
+    int nextElePos = 0;
+    while (bingo < nextBingo) {
+        int startPos = nextElePos;	// Будет отслеживать положение элементов, чтобы переместить их в правильное положение
+        for (int i = startPos; i < size; ++i) {
+            if (arr[i] == bingo) {
+                std::swap(arr[i], arr[nextElePos]);
+                nextElePos = nextElePos + 1;
+            }
+            // Здесь мы находим следующий элемент Бинго для следующего прохождения
+            else if (arr[i] < nextBingo)
+                nextBingo = arr[i];
+        }
+        bingo = nextBingo;
+        nextBingo = largestEle;
+    }
+}
+void InsertionSort(int* arr, int size) {
+    for (int i = 1; i < size; ++i) {
+        for (int j = i; j > 0 && arr[j] < arr[j - 1]; --j) {
+            int temp = arr[j];
+            arr[j] = arr[j - 1];
+            arr[j - 1] = temp;
+        }
+    }
+}
+void QuickSortRecursion(int* arr, int left, int right) {
+    if (left >= right) return;
+
+    int pivot = arr[(left + right) / 2];  // опорный элемент
+    int i = left;
+    int j = right;
+
+    while (i <= j) {
+        while (arr[i] < pivot) i++;
+        while (arr[j] > pivot) j--;
+
+        if (i <= j) {
+            //std::swap(arr[i], arr[j]);
+            int temp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = temp;
+
+            i++;
+            j--;
+        }
+    }
+
+    // Рекурсивно вызываем для левой и правой части
+    if (left < j) QuickSortRecursion(arr, left, j);
+    if (i < right) QuickSortRecursion(arr, i, right);
+    /*
+    * Реализация если опорный элемент будет последним элементом массива.
+    * Это ни на что не влияет, оптимальный опорный элемент всегда рандомный в разных последовательностях
+    if (left >= right) return;
+
+    int pivot = arr[right];
+    int i = left;
+    int j = right - 1;
+
+    while (i <= j) {
+        while (i <= j && arr[i] <= pivot) ++i;
+        while (i <= j && arr[j] > pivot) --j;
+
+        if (i <= j) {
+            std::swap(arr[i], arr[j]);
+            ++i; --j;
+        }
+    }
+
+    std::swap(arr[i], arr[right]);
+    QuickSortRecursion(arr, left, i - 1);
+    QuickSortRecursion(arr, i + 1, right);
+    */
+}
+int IterativeQuickSort(int* arr, size_t elements) {
+    //https://translated.turbopages.org/proxy_u/en-ru.ru.8e4e096f-6849a79e-d4b70951-74722d776562/https/stackoverflow.com/questions/55008384/can-quicksort-be-implemented-in-c-without-stack-and-recursion
+    size_t beg[48], end[48], L, R;
+    int i = 0;
+
+    beg[0] = 0;
+    end[0] = elements;
+    while (i >= 0) {
+        L = beg[i];
+        R = end[i];
+        if (R - L > 1) {
+            size_t M = L + ((R - L) >> 1);
+            int piv = arr[M];
+            arr[M] = arr[L];
+
+            if (i == 48 - 1)
+                return -1;
+            R--;
+            while (L < R) {
+                while (arr[R] >= piv && L < R)
+                    R--;
+                if (L < R)
+                    arr[L++] = arr[R];
+                while (arr[L] <= piv && L < R)
+                    L++;
+                if (L < R)
+                    arr[R--] = arr[L];
+            }
+            arr[L] = piv;
+            M = L + 1;
+            while (L > beg[i] && arr[L - 1] == piv)
+                L--;
+            while (M < end[i] && arr[M] == piv)
+                M++;
+            if (L - beg[i] > end[i] - M) {
+                beg[i + 1] = M;
+                end[i + 1] = end[i];
+                end[i++] = L;
+            }
+            else {
+                beg[i + 1] = beg[i];
+                end[i + 1] = L;
+                beg[i++] = M;
+            }
+        }
+        else {
+            i--;
+        }
+    }
+    return 0;
+}
+/// Рекурсивная функция быстрой сортировки с поддержкой параллельного выполнения
+// Минимальный размер подмассива, при котором имеет смысл запускать параллельную сортировку
+const size_t MIN_PARALLEL_SIZE = 10000;
+// Максимальное количество потоков (равно количеству аппаратных ядер)
+const unsigned int MAX_THREADS = std::thread::hardware_concurrency();
+
+void parallel_quicksort(int* data, int left, int right, unsigned depth = 0) {
+    if (left >= right)
+        return;
+
+    // Пивот - Выбор опорного элемента — середина подмассива
+    int pivot = data[(left + right) / 2];
+    int i = left, j = right;
+
+    // Разделение
+    while (i <= j) {
+        while (data[i] < pivot) ++i;
+        while (data[j] > pivot) --j;
+        if (i <= j) {
+            std::swap(data[i], data[j]);
+            ++i;
+            --j;
+        }
+    }
+
+    // Решаем, запускать ли параллельно
+    // Вычисляем размеры подмассивов после разделения
+    auto left_size = j - left;
+    auto right_size = right - i;
+
+    // Решаем: стоит ли сортировать параллельно
+    bool parallel_left = left_size > static_cast<int>(MIN_PARALLEL_SIZE) && depth < MAX_THREADS;
+    bool parallel_right = right_size > static_cast<int>(MIN_PARALLEL_SIZE) && depth < MAX_THREADS;
+
+    // Асинхронные задачи для левой и правой части
+    std::future<void> left_future;
+    std::future<void> right_future;
+
+    // Сортируем левую часть
+    if (parallel_left) {
+        // Запускаем сортировку в отдельном потоке (через std::async)
+        left_future = std::async(std::launch::async, [&]() {
+            parallel_quicksort(data, left, j, depth + 1);
+            });
+    }
+    else {
+        // Сортируем обычным рекурсивным вызовом
+        parallel_quicksort(data, left, j, depth);
+    }
+
+    // Аналогично для правой части
+    if (parallel_right) {
+        right_future = std::async(std::launch::async, [&]() {
+            parallel_quicksort(data, i, right, depth + 1);
+            });
+    }
+    else {
+        parallel_quicksort(data, i, right, depth);
+    }
+
+    // Ждём завершения задач, если они были запущены в отдельных потоках
+    if (parallel_left) left_future.wait();
+    if (parallel_right) right_future.wait();
+}
+
+
+/// Обёртка, которую удобно вызывать снаружи
+void ParallelQuickSort(int* data, int size) {
+    // Если массив маленький — сортируем обычным std::sort
+    if (size <= MIN_PARALLEL_SIZE) {
+        std::sort(data, data + size);
+    }
+    else {
+        // Иначе запускаем параллельную быструю сортировку
+        parallel_quicksort(data, 0, size - 1);
+    }
+}
+void MergeIn_RecursionMergeSort_WithOperatorNew(int* arr, int left, int mid, int right) {
+    const int size = right - left + 1;
+    int i = left, j = mid + 1, k = 0;
+    int* tempArr = new int[size];
+
+    while (i <= mid && j <= right) {
+        if (arr[i] < arr[j])
+            tempArr[k++] = arr[i++];
+        else
+            tempArr[k++] = arr[j++];
+    }
+    while (i <= mid)
+        tempArr[k++] = arr[i++];
+    while (j <= right)
+        tempArr[k++] = arr[j++];
+    for (i = left, k = 0; i <= right; ++i, ++k)
+        arr[i] = tempArr[k];
+
+    delete[] tempArr;
+}
+void RecursionMergeSort_WithOperatorNew(int* arr, int left, int right) {
+    if (left < right) {
+        int mid = left + (right - left) / 2;
+        RecursionMergeSort_WithOperatorNew(arr, left, mid);
+        RecursionMergeSort_WithOperatorNew(arr, mid + 1, right);
+        MergeIn_RecursionMergeSort_WithOperatorNew(arr, left, mid, right);
+    }
+}
+void MergeIn_RecursionMergeSort_OnStack(int* arr, int left, int mid, int right, int* buffer) {
+    int i = left, j = mid + 1, k = left;
+
+    while (i <= mid && j <= right) {
+        if (arr[i] <= arr[j])
+            buffer[k++] = arr[i++];
+        else
+            buffer[k++] = arr[j++];
+    }
+
+    while (i <= mid)
+        buffer[k++] = arr[i++];
+    while (j <= right)
+        buffer[k++] = arr[j++];
+
+    for (int l = left; l <= right; ++l)
+        arr[l] = buffer[l];
+}
+void RecursionMergeSort_OnStack(int* arr, int left, int right, int* buffer) {
+    if (left >= right) return;
+    int mid = left + (right - left) / 2;
+    RecursionMergeSort_OnStack(arr, left, mid, buffer);
+    RecursionMergeSort_OnStack(arr, mid + 1, right, buffer);
+    MergeIn_RecursionMergeSort_OnStack(arr, left, mid, right, buffer);
+}
+void MergeIn_IterativeMergeSort(int* arr, int* buffer, int left, int mid, int right) {
+    int i = left, j = mid, k = left;
+
+    while (i < mid && j <= right) {
+        if (arr[i] <= arr[j])
+            buffer[k++] = arr[i++];
+        else
+            buffer[k++] = arr[j++];
+    }
+    while (i < mid)
+        buffer[k++] = arr[i++];
+    while (j <= right)
+        buffer[k++] = arr[j++];
+
+    for (int l = left; l <= right; ++l)
+        arr[l] = buffer[l];
+}
+
+void IterativeMergeSort(int* arr, int size) {
+    int* buffer = new int[size];
+
+    for (int width = 1; width < size; width *= 2) {
+        for (int i = 0; i < size; i += 2 * width) {
+            int left = i;
+            int mid = std::min(i + width, size);
+            int right = std::min(i + 2 * width - 1, size - 1);
+            MergeIn_IterativeMergeSort(arr, buffer, left, mid, right);
+        }
+    }
+
+    delete[] buffer;
+}
+void ParallelMergeSort(int* arr, int left, int right) {
+    static int countProc = 0;
+    static unsigned int MAX_THREADS = std::thread::hardware_concurrency();
+    std::recursive_mutex rm;
+
+    if (left < right) {
+        int mid = left + (right - left) / 2;
+
+        rm.lock();
+        if (countProc < MAX_THREADS) {
+            ++countProc;
+            rm.unlock();
+
+            std::thread th1 (ParallelMergeSort, arr, left, mid);
+            ParallelMergeSort(arr, mid + 1, right);
+            th1.join();
+        }
+        else {
+            rm.unlock();
+            ParallelMergeSort(arr, left, mid);
+            ParallelMergeSort(arr, mid + 1, right);
+        }
+
+        MergeIn_RecursionMergeSort_WithOperatorNew(arr, left, mid, right);
+    }
+}
+void Heapify(int arr[], int n, int i) {	 		// arr массив, n его размер, i текущий индекс
+    // Find largest among root, left child and right child
+    int largest = i;				            // largest это индекс наибольшего элемента, по умолчанию это индекс текущего элемента
+    int left = 2 * i + 1;				        // Индекс левого дочернего элемента
+    int right = 2 * i + 2;				        // Индекс правого дочернего элемента
+
+    if (left  < n && arr[left] > arr[largest])	// Условие l < n проверяет что левый дочерний элемент вообще существует. Условие arr[l] > arr[largest] сравнивает значения дочернего левого элемента с наибольшим элементом. (В
+        largest = left;				            // данном случае наибольший элемент считается текущим родительским). И если значение левого дочернего элемента больше текущего, то индекс наибольшего элемента изменяется.
+
+    if (right < n && arr[right] > arr[largest])	// Тоже самое делаем с правым дочерним элементом. Таким образом мы нашли наибольший из этих трёх элементов.
+        largest = right;
+
+    // Swap and continue heapifying if root is not largest
+    if (largest != i) {				            // И если индекс наибольшего элемента не совпадает с индексом текущего элемента
+        //std::swap(arr[i], arr[largest]);	    // Тогда меняем местами два элемента (Текущий, и дочерний наибольший).
+        int temp = arr[i];
+        arr[i] = arr[largest];
+        arr[largest] = temp;
+
+        Heapify(arr, n, largest);		        // Вызываем рекурсивно эту же функцию на изменённый дочерний элемент, для того чтобы ветка дочернего элемента, которую мы только что изменили, тоже пришла в правильное состояние.
+    }
+}
+
+// main function to do heap sort
+void HeapSort(int arr[], int n)
+{
+    // Build max heap
+    for (int i = n / 2 - 1; i >= 0; i--)		// Строим кучу
+        Heapify(arr, n, i);
+
+    // Heap sort
+    for (int i = n - 1; i >= 0; i--) {		// Сортируем кучу
+        //std::swap(arr[0], arr[i]);		// Меняем местами корневой и последний элемен кучи
+        int temp = arr[0];
+        arr[0] = arr[i];
+        arr[i] = temp;
+
+        // Heapify root element to get highest element at root again
+        Heapify(arr, i, 0);			// Проверяем кучу на корректное расположение элементов
+    }
+}
+
+// Функция "просеивания вниз" — итеративная версия
+void HeapifyIterative_IterativeHeapSort(int arr[], int n, int i) {
+    while (true) {
+        int largest = i;        // текущий узел
+        int left = 2 * i + 1;   // левый потомок
+        int right = 2 * i + 2;  // правый потомок
+
+        if (left < n && arr[left] > arr[largest])
+            largest = left;
+
+        if (right < n && arr[right] > arr[largest])
+            largest = right;
+
+        if (largest != i) {
+            //std::swap(arr[i], arr[largest]);
+            int temp = arr[i];
+            arr[i] = arr[largest];
+            arr[largest] = temp;
+
+            i = largest; // идем дальше вниз по дереву
+        }
+        else {
+            break; // если потомки меньше — всё, куча восстановлена
+        }
+    }
+}
+
+void IterativeHeapSort(int arr[], int n) {
+    // Построение кучи (max-heap) снизу вверх
+    for (int i = n / 2 - 1; i >= 0; --i) {
+        HeapifyIterative_IterativeHeapSort(arr, n, i);
+    }
+
+    // Сортировка
+    for (int i = n - 1; i > 0; --i) {
+        std::swap(arr[0], arr[i]);           // Перемещаем текущий максимум в конец
+        HeapifyIterative_IterativeHeapSort(arr, i, 0);         // Восстанавливаем кучу на оставшемся префиксе
+    }
+}
+
+
+int main() {
+    system("chcp 1251");
+    //std::cout << "Hardware threads: " << std::thread::hardware_concurrency() << std::endl;
+
+    constexpr int num = 20'000'0;
+    constexpr int numTests = 10;
+    constexpr bool onTest = true;
+    constexpr bool onSlowSort = false;
+    constexpr bool onlyQuickSort = false;
+    //double total = 0;
+    //double averageTime = 0;
+
+    int* const mainUnsortedArr = new int[num];
+    int* const testArr = new int[num];
+    std::map<std::string, double> resultMap;
+
+    srand(time(NULL));
+    for (int i = 0; i < num; ++i)
+        mainUnsortedArr[i] = rand();
+
+
+    if (onTest) {
+        if (onSlowSort && !onlyQuickSort) {
+            {
+                //BubbleSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "BubbleSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    BubbleSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nПузырьковая сортировка на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //CocktailSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "CocktailSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    CocktailSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nCocktailSort на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //SelectionSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "SelectionSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    SelectionSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultVec.push_back(averageTime);
+                std::cout << "\nСортировка выбором на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //BingoSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "BingoSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    BingoSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nБинго сортировка на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //InsertionSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "InsertionSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    InsertionSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultVec.push_back(averageTime);
+                std::cout << "\nСортировка вставками на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+        }
+        if (!onlyQuickSort) {
+            {
+                //RecursionMergeSort_WithOperatorNew
+                /////////////////////////////////////////////////////////////////
+                std::string name = "RecursionMergeSort_WithOperatorNew";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    RecursionMergeSort_WithOperatorNew(testArr, 0, num - 1);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nРекурсивная сортировка слиянием с оператором new на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //RecursionMergeSort_OnStack
+                /////////////////////////////////////////////////////////////////
+                std::string name = "RecursionMergeSort_OnStack";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+                constexpr size_t maxStackSize = 1024 * 1024 * 1;                          // У меня стек 1 МБ
+                constexpr size_t maxArrSize = maxStackSize / sizeof(int);
+
+                if constexpr (num < maxArrSize) {
+                    // Запускаем итерации теста
+                    int buffer[num];
+                    for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                        // Подготавливаем массив для теста
+                        for (int i = 0; i < num; ++i) {
+                            testArr[i] = mainUnsortedArr[i];
+                        }
+
+                        // Засекаем время перед началом вставки
+                        auto start = std::chrono::high_resolution_clock::now();
+                        RecursionMergeSort_OnStack(testArr, 0, num - 1, buffer);
+                        // Засекаем время после окончания вставки
+                        auto end = std::chrono::high_resolution_clock::now();
+                        // Проверяем сортировку
+                        Checker(testArr, num, name);
+                        // Вычисляем время выполнения
+                        std::chrono::duration<double> elapsed = end - start;
+                        std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                        //timeArr[indexTest] = elapsed;
+                        averageTime += elapsed.count();
+                    }
+
+                    averageTime = averageTime / numTests;
+                    resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                    //resultMap.
+                    std::cout << "\nРекурсивная сортировка слиянием на стеке на " << num << " элементов. Среднее время: "
+                        << averageTime << " секунд\n";
+                }
+                else {
+                    size_t currentSize = num * sizeof(int) / (1024 * 1024);
+                    std::cout << "\nРекурсивная сортировка слиянием на стеке не выполнилась из-за возможного переполнения стека." <<
+                        "\nРазмер требуемого места для типа int для " << num << " элементов составляет примерно " << currentSize << " Мб.\n";
+                }
+            }
+            {
+                //IterativeMergeSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "IterativeMergeSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    //MergeIn_IterativeMergeSort(testArr, num);
+                    IterativeMergeSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nИтеративная сортировка слиянием на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //HeapSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "HeapSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    HeapSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nПирамидальная сортировка (Сортировка кучей) на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //IterativeHeapSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "IterativeHeapSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    IterativeHeapSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nПирамидальная сортировка (Сортировка кучей) на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+            {
+                //CombSort
+                /////////////////////////////////////////////////////////////////
+                std::string name = "CombSort";
+                std::cout << "\nЗапуск проверки: " << name << '\n';
+                //std::chrono::duration<double> timeArr[numTests];
+                double averageTime = 0;
+
+                // Запускаем итерации теста
+                for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                    // Подготавливаем массив для теста
+                    for (int i = 0; i < num; ++i) {
+                        testArr[i] = mainUnsortedArr[i];
+                    }
+                    // Засекаем время перед началом вставки
+                    auto start = std::chrono::high_resolution_clock::now();
+                    CombSort(testArr, num);
+                    // Засекаем время после окончания вставки
+                    auto end = std::chrono::high_resolution_clock::now();
+                    // Проверяем сортировку
+                    Checker(testArr, num, name);
+                    // Вычисляем время выполнения
+                    std::chrono::duration<double> elapsed = end - start;
+                    std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                    //timeArr[indexTest] = elapsed;
+                    averageTime += elapsed.count();
+                }
+
+                averageTime = averageTime / numTests;
+                resultMap.insert(std::pair<std::string, double>(name, averageTime));
+                //resultMap.
+                std::cout << "\nПирамидальная сортировка (Сортировка кучей) на " << num << " элементов. Среднее время: "
+                    << averageTime << " секунд\n";
+            }
+        }
+
+        {
+            //QuickSortRecursion
+            /////////////////////////////////////////////////////////////////
+            std::string name = "QuickSortRecursion";
+            std::cout << "\nЗапуск проверки: " << name << '\n';
+            //std::chrono::duration<double> timeArr[numTests];
+            double averageTime = 0;
+
+            // Запускаем итерации теста
+            for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                // Подготавливаем массив для теста
+                for (int i = 0; i < num; ++i) {
+                    testArr[i] = mainUnsortedArr[i];
+                }
+                // Засекаем время перед началом вставки
+                auto start = std::chrono::high_resolution_clock::now();
+                QuickSortRecursion(testArr, 0, num - 1);
+                // Засекаем время после окончания вставки
+                auto end = std::chrono::high_resolution_clock::now();
+                // Проверяем сортировку
+                Checker(testArr, num, name);
+                // Вычисляем время выполнения
+                std::chrono::duration<double> elapsed = end - start;
+                std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                //timeArr[indexTest] = elapsed;
+                averageTime += elapsed.count();
+            }
+
+            averageTime = averageTime / numTests;
+            resultMap.insert(std::pair<std::string, double>(name, averageTime));
+            //resultVec.push_back(averageTime);
+            std::cout << "\nРекурсивная быстрая сортировка на " << num << " элементов. Среднее время: "
+                << averageTime << " секунд\n";
+        }
+        {
+            //IterativeQuickSort
+            /////////////////////////////////////////////////////////////////
+            std::string name = "IterativeQuickSort";
+            std::cout << "\nЗапуск проверки: " << name << '\n';
+            //std::chrono::duration<double> timeArr[numTests];
+            double averageTime = 0;
+
+            // Запускаем итерации теста
+            for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                // Подготавливаем массив для теста
+                for (int i = 0; i < num; ++i) {
+                    testArr[i] = mainUnsortedArr[i];
+                }
+                // Засекаем время перед началом вставки
+                auto start = std::chrono::high_resolution_clock::now();
+                IterativeQuickSort(testArr, num);
+                // Засекаем время после окончания вставки
+                auto end = std::chrono::high_resolution_clock::now();
+                // Проверяем сортировку
+                Checker(testArr, num, name);
+                // Вычисляем время выполнения
+                std::chrono::duration<double> elapsed = end - start;
+                std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                //timeArr[indexTest] = elapsed;
+                averageTime += elapsed.count();
+            }
+
+            averageTime = averageTime / numTests;
+            resultMap.insert(std::pair<std::string, double>(name, averageTime));
+            //resultMap.
+            std::cout << "\nБыстрая сортировка без рекурсии на " << num << " элементов. Среднее время: "
+                << averageTime << " секунд\n";
+        }
+        {
+            //ParallelQuickSort
+            /////////////////////////////////////////////////////////////////
+            std::string name = "ParallelQuickSort";
+            std::cout << "\nЗапуск проверки: " << name << '\n';
+            //std::chrono::duration<double> timeArr[numTests];
+            double averageTime = 0;
+
+            // Запускаем итерации теста
+            for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+                // Подготавливаем массив для теста
+                for (int i = 0; i < num; ++i) {
+                    testArr[i] = mainUnsortedArr[i];
+                }
+                // Засекаем время перед началом вставки
+                auto start = std::chrono::high_resolution_clock::now();
+                ParallelQuickSort(testArr, num);
+                // Засекаем время после окончания вставки
+                auto end = std::chrono::high_resolution_clock::now();
+                // Проверяем сортировку
+                Checker(testArr, num, name);
+                // Вычисляем время выполнения
+                std::chrono::duration<double> elapsed = end - start;
+                std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+                //timeArr[indexTest] = elapsed;
+                averageTime += elapsed.count();
+            }
+
+            averageTime = averageTime / numTests;
+            resultMap.insert(std::pair<std::string, double>(name, averageTime));
+            //resultMap.
+            std::cout << "\nПараллельная быстрая сортировка на " << num << " элементов. Среднее время: "
+                << averageTime << " секунд\n";
+        }
+    }
+    {
+        //ParallelMergeSort
+        /////////////////////////////////////////////////////////////////
+        std::string name = "ParallelMergeSort";
+        std::cout << "\nЗапуск проверки: " << name << '\n';
+        //std::chrono::duration<double> timeArr[numTests];
+        double averageTime = 0;
+
+        // Запускаем итерации теста
+        for (int indexTest = 0; indexTest < numTests; ++indexTest) {
+            // Подготавливаем массив для теста
+            for (int i = 0; i < num; ++i) {
+                testArr[i] = mainUnsortedArr[i];
+            }
+            // Засекаем время перед началом вставки
+            auto start = std::chrono::high_resolution_clock::now();
+            ParallelMergeSort(testArr, 0, num - 1);
+            // Засекаем время после окончания вставки
+            auto end = std::chrono::high_resolution_clock::now();
+            // Проверяем сортировку
+            Checker(testArr, num, name);
+            // Вычисляем время выполнения
+            std::chrono::duration<double> elapsed = end - start;
+            std::cout << "# Итерация = " << indexTest + 1 << ", время = " << elapsed.count() << "\n";
+            //timeArr[indexTest] = elapsed;
+            averageTime += elapsed.count();
+        }
+
+        averageTime = averageTime / numTests;
+        resultMap.insert(std::pair<std::string, double>(name, averageTime));
+        //resultMap.
+        std::cout << "\nПараллельная сортировка слиянием на " << num << " элементов. Среднее время: "
+            << averageTime << " секунд\n";
+    }
+
+
+    delete[] mainUnsortedArr; delete[] testArr;
+
+    std::cout << "\n#######################\nРезультат\n";
+    std::cout << "Самый медленный алгоритм: ";
+    double slowDouble = 0;
+    std::string slowName;
+    for (const auto& [name, time] : resultMap) {
+        if (time > slowDouble) {
+            slowDouble = time;
+            slowName = name;
+        }
+    }
+    std::cout << slowName << ": " << slowDouble << " секунд\n";
+    ///
+    std::cout << "Самый быстрый алгоритм: ";
+    double fastDouble = DBL_MAX;
+    std::string fastName;
+    for (const auto& [name, time] : resultMap) {
+        if (time < fastDouble) {
+            fastDouble = time;
+            fastName = name;
+        }
+    }
+    std::cout << fastName << ": " << fastDouble << " секунд\n";
+
+    std::cout << fastName << " быстрее чем " << slowName << " в " << slowDouble / fastDouble << " раз.\n";
+    ///
+    double doubleQuickSortRecursion = resultMap["QuickSortRecursion"];
+    double doubleIterativeQuickSort = resultMap["IterativeQuickSort"];
+
+    if (doubleIterativeQuickSort < doubleQuickSortRecursion)
+        std::cout << "IterativeQuickSort быстрее чем QuickSortRecursion в " << doubleQuickSortRecursion / doubleIterativeQuickSort << " раз.\n";
+    else if (doubleIterativeQuickSort > doubleQuickSortRecursion)
+        std::cout << "QuickSortRecursion быстрее чем IterativeQuickSort в " << doubleIterativeQuickSort / doubleQuickSortRecursion << " раз.\n";
+    else
+        std::cout << "QuickSortRecursion равен с IterativeQuickSort (Это чудо). \n";
+    ///
+    std::cout << "\n\n###  ТИР ЛИСТ ###\n";
+
+    size_t numTirList = 1;
+    while (resultMap.size() != 0) {
+        double fastDouble = DBL_MAX;
+        std::string fastName;
+        for (const auto& [name, time] : resultMap) {
+            if (time < fastDouble) {
+                fastDouble = time;
+                fastName = name;
+            }
+        }
+
+        std::cout << " " << numTirList++ << "# - " << fastName << ": " << fastDouble << " секунд\n";
+        resultMap.erase(fastName);
+    }
+
+    std::cout << "\n\n" << std::endl;
+}

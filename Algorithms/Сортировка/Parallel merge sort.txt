@@ -1,0 +1,358 @@
+// Не доделал
+
+
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <mutex>
+
+constexpr void Checker(int* arr, int size, const std::string& nameSort) {
+    for (int i = 0; i < size - 1; ++i) {
+        if (arr[i] > arr[i + 1]) {
+            std::cout << "Проверка провалилась!\n";
+            std::cout << nameSort;
+            std::cout << "i = " << i << ". arr[i] = " << arr[i] << ", arr[i + 1] = " << arr[i + 1] << '\n';
+            exit(0);
+        }
+    }
+}
+
+void merge(int* arr, int left, int mid, int right) {
+    const int size = right - left + 1;
+    int i = left, j = mid + 1, k = 0;
+    int* tempArr = new int[size];
+
+    while (i <= mid && j <= right) {
+        if (arr[i] <= arr[j]) {
+            tempArr[k++] = arr[i++];
+        } else {
+            tempArr[k++] = arr[j++];
+        }
+    }
+    while (i <= mid) {
+        tempArr[k++] = arr[i++];
+    }
+    while (j <= right) {
+        tempArr[k++] = arr[j++];
+    }
+    for (int i = left, k = 0; i <= right; ++i, ++k) {
+        arr[i] = tempArr[k];
+    }
+
+    delete[] tempArr;
+}
+
+void mergeSort(int* arr, int left, int right) {
+   if (left < right) {
+       int mid = left + (right - left) / 2;
+       mergeSort(arr, left, mid);
+       mergeSort(arr, mid + 1, right);
+       merge(arr, left, mid, right);
+   }
+}
+
+// Многопоточная сортировка слиянием
+// Блягодаря тому, что сортировка слиянием построена на принципе "Разделяй и властвуй", выполнение данного алгоритма можно весьма эффективно расспараллелить. При оценке асимптотики допускается, что возможен запуск неограниченного кол-ва
+// независимых процессов, т.е. процессов с вычислительными ресурсами, не зависящими от других процессов, что на практике не достяжимо. Более того, при реализации имеет смысл ограничить кол-во параллельных потоков.
+
+// Сортировка с однопоточным слиянием.
+// Внесём в алгоритм следующую модификацию: будем сортировать левую и правую части массива параллельно. В данном алгоритме левую часть запускаем в отдельном потоке, а правую часть обрабатываем в текущем потоке, после чего ожидаем завершения
+// левого потока в строчке th1.join(). Функция merge аналогична функции из обычного алгоритма сортировки слиянием. Несмотря на наличие двух рекурсивных вызовов, при оценке будем считать, что совершаетсяодин вызов, т.к. оба вызова выполняются
+// параллельно с одинаковой асимптотикой. Время работы данного алгоритма: T(n) = T(n/2) + O(n) = O(n). Данная асимптотика достягается при возможности запускать неограниченное кол-во потоков независимо друг от друга.
+void parallelMergeSort(int* arr, int left, int right) {
+   if (left < right) {
+       int mid = left + (right - left) / 2;
+       // Неправильная реализация (потому что всего 2 потока, я не ту функцию запустил XD)
+       std::thread th1 (mergeSort, arr, left, mid);
+       mergeSort(arr, mid + 1, right);
+
+       th1.join();
+       merge(arr, left, mid, right);
+   }
+}
+
+void parallelMergeSort_2(int* arr, int left, int right) {
+    static int countProc = 0;
+    std::recursive_mutex rm;
+
+    if (left < right) {
+        int mid = left + (right - left) / 2;
+
+        rm.lock();
+        if (countProc < 8) {
+            ++countProc;
+            rm.unlock();
+
+            std::thread th1 (parallelMergeSort_2, arr, left, mid);
+            parallelMergeSort_2(arr, mid + 1, right);
+            th1.join();
+        }
+        else {
+            rm.unlock();
+            mergeSort(arr, left, mid);
+            mergeSort(arr, mid + 1, right);
+        }
+
+        merge(arr, left, mid, right);
+    }
+}
+
+
+/* Многопоточное слияние
+Как видно из оценки предыдущего алгоритма, само слияние является его узким местом. Попытаемся распараллелить слияние, для чего рассмотрим алгоритм рекурсивного слияния массивов T[left_1...right_1] и T[left_2...right_2] в массив
+A[left_3...right_3]:
+1) Убедимся, что размер T[left_1...right_1] больше или равен размеру T[left_2...right_2]
+2) Возьмём x = T[mid_1] - середину первого массива (x также является и медианой этого массива)
+3) При помощи Бинарного поиска (Binary search) найдём mid_2 такое, что для всех y из T[left_2...mid_2 - 1] было верно что y < x.
+4) mid_3 = left_3 + (mid_1 - left_1) + (mid_2 - left_2).
+5) A[mid_3] = x
+6) Сольём T[right_1...mid_1 - 1] и T[right_2...mid_2] в A[right_3...mid_3 - 1].
+7) Сольём T[mid_1 + 1 ...right_1] и T[mid_2...right_2] в A[mid_3 + 1 ...right_3]
+
+
+    left_1          mid_1             right_1              left_2         mid_2     right_2
+ -----|--------------|------|------------|-------------------|--------------|---------|-----------
+T  ...|      <= x    |  x   |     >=x    |        ...        |      <x      |    >=x  |       ...
+ -----|--------------|------|------------|-------------------|--------------|---------|-----------
+             |          |          |                                |           |
+	         |          |          |                                |           |
+	         |          |          |                                |           |
+             |          |          |                                |           |
+	         |          |          |                                |           |
+             \---\/-----|----------|--------------------------------/           |
+                 ||     |          \------------------\/------------------------/
+                 ||     |                             ||
+                 \/     \----------\                  \/
+	   merge                      copy               merge
+ ------|----------------------|------------|----------------------|-----------
+A  ... |         <=x          |      x     |          >=x         |        ...
+ ------|----------------------|------------|----------------------|-----------
+      left_3                 mid_3                              right_3
+
+Оба массива содержат n_1 + n_2 = n элементов. К моменту рекурсивных вызовов n_2 <= n_1, значит n_2 = 2 * n_2 / 2  <= (n_1 + n_2) / 2  = n / 2. В худшем случае один из двух рекурсивных вызовов сольёт n_1 / 2 элементов T[left_1 ... right_1] с n_2 элементами
+T[left_2 ... right_2] и тогда кол-во элементов первых двух массивов в рекурсивном вызове будет равно n_1 / 2 + n_2 <= n_1 / 2 + n_2 / 2 + n_2 / 2 = (n_1 + n_2) / 2 + n_2 / 2 <= n / 2 + n / 4 = 3/4 n.
+Асимптотика каждого вызова функции - O(log n), т.е. время затрачиваемое на бинарный поиск. Т.е. рекурсивные вызовы функции выполняются параллельно, а потоки при оценке независимы, время их выполнения будет равно времени выполнения самого
+долгого вызова. В худшем случае это T(3/4 n). Тогда получим оценку сверху T_merge(n) = T_merge(3/4 n) + O(log n) = O(log^2 n).
+
+*/
+
+
+int binarySearch(int* arr, int x, int left, int right) {
+
+    // TODO случай для left == right
+
+    if(x <= arr[left]) return left;
+    while (left <= right) {
+        int mid = left + (right - left) / 2;
+        if (arr[mid] < x)
+            left = mid + 1;
+        else
+            right = mid - 1;
+    }
+    return left;
+}
+
+//void mergeMT(int* arr, int* A, int left_1, int right_1, int left_2, int right_2, int left_3) {
+void mergeMT(int* arr, int left_1, int right_1, int left_2, int right_2, int left_3) {
+    int n_1 = right_1 - left_1 - 1;
+    int n_2 = right_2 - left_2 - 1;
+
+    /*
+    if(n_1 < n_2) {
+        std::swap(left_1, left_2);
+        std::swap(right_1, right_2);
+        std::swap(n_1, n_2);
+    }
+    if (n_1 <= 0)
+    //if (n_1 == 0)
+        return;*/
+    //else {
+        //int tempSize = right_2 - left_1 + 1;
+        //int A[tempSize];
+
+        int mid_1 = (left_1 + right_1) / 2;
+        int mid_2 = binarySearch(arr, arr[mid_1], left_2, right_2); // Не знаю надо - 1 или нет?
+        int mid_3 = left_3 + (mid_1 - left_1) + (mid_2 - left_2);
+        //A[mid_3] = arr[mid_1];
+        int value_mid_3 = arr[mid_1];
+
+        //mergeMT(arr, A, left_1, mid_1 - 1, left_2, mid_2 - 1, left_3);
+        //mergeMT(arr, A, mid_1 + 1, right_1, mid_2, right_2, mid_3 + 1);
+
+        ////////////
+        int size_1 = mid_1 - 1 - left_1 + 1;
+        int size_2 = mid_2 - 1 - left_2 + 1;
+        int size_part_1 = size_1 + size_2;
+        int part_1[size_part_1];
+
+        if (size_part_1 > 0) {
+            //int part_1[size_part_1];
+            int start = 0;
+            for(int i = left_1; i < mid_1; ++i, ++start)
+                part_1[start] = arr[i];
+            for(int i = left_2; i < mid_2; ++i, ++start)
+                part_1[start] = arr[i];
+
+            int midMerge = (size_part_1) / 2;
+            merge(part_1, 0, midMerge, size_part_1);
+        }
+        ////////////
+
+        int size_3 = right_1 - mid_1;           // Пок не понимаю надо + 1 или нет
+        int size_4 = right_2 - mid_2 + 1;
+        int size_part_2 = size_3 + size_4;
+        int part_2[size_part_2];
+
+        if (size_part_2 > 0) {
+            //int part_2[size_part_2];
+            int start_2 = 0;
+            for(int i = mid_1 + 1; i < right_1 + 1; ++i, ++start_2)
+                part_2[start_2] = arr[i];
+            for(int i = mid_2; i < right_2 + 1; ++i, ++start_2)
+                part_2[start_2] = arr[i];
+
+            int midMerge2 = (size_part_2) / 2 - 1;          // Когда то нужен - 1, а когда то нет
+            merge(part_2, 0, midMerge2, size_part_2 - 1);   // Тоже самое
+        }
+
+        ////////////
+        int start_3 = left_1;
+        for (int i = 0; i < size_1 + size_2; ++i, ++start_3) {
+           arr[start_3] = part_1[i];
+           std::cout << arr[start_3] << " ";
+        }
+
+        arr[start_3++] = value_mid_3;
+        std::cout << arr[start_3 - 1] << " ";
+        //++start_3;
+        for (int i = 0; i < size_3 + size_4; ++i, ++start_3) {
+            arr[start_3] = part_2[i];
+            std::cout << arr[start_3] << " ";
+        }
+
+
+        /*
+        for(int i = left_1; i < right_2 + 1; ++i)
+            std::cout << arr[i] << '\n';*/
+        std::cout << '-' << '\n';
+        /*
+        int start_3 = 0;
+        for (int i = 0; i < size_1 + size_2; ++i, ++start_3)
+            A[start_3] = part_1[i];
+        ++start_3;                                          // Пропускаем значение mid_3
+        for (int i = 0; i < size_3 + size_4; ++i, ++start_3)
+            A[start_3] = part_2[i];*/
+
+        /*
+        for (int i = 0; i < 7; ++i)
+            std::cout << A[i] << "\n";*/
+
+    //}
+}
+
+void parallelMergeSort_3(int* arr, int left, int right) {
+    /*if (right - left == 1) {
+        if (arr[right] < arr[left]) {
+            int temp = arr[left];
+            arr[left] = arr[right];
+            arr[right] = temp;
+        }
+
+        std::cout << arr[left] << ' ';
+        std::cout << arr[right] << "-\n";
+
+    }
+    // Почему то когда активирую этот код то функция merge работает по другому
+    else*/ if (left < right) {
+        int mid = left + (right - left) / 2;
+        // Неправильная реализация (потому что всего 2 потока, я не ту функцию запустил XD)
+        //std::thread th1 (mergeSort, arr, left, mid);
+        parallelMergeSort_3(arr, left, mid);
+        parallelMergeSort_3(arr, mid + 1, right);
+
+        //th1.join();
+
+        mergeMT(arr, left, mid, mid + 1, right, 0);
+        //merge(arr, left, mid, right);
+    }
+}
+
+
+
+int main() {
+    system("chcp 1251");
+    //const int num = 20'000'0;
+    const int num = 10;
+    //int* const mainUnsortedArr = new int[num];
+    int* const testArr = new int[num];
+
+    /*
+    srand(time(NULL));
+    for (int i = 0; i < num; ++i)
+        mainUnsortedArr[i] = rand();*/
+
+
+    int mainUnsortedArr[num] = {4,7,1,8,2,5,3,9,6,10};
+
+
+
+    ////////////////////////////////////////////
+    for (int i = 0; i < num; ++i)
+        testArr[i] = mainUnsortedArr[i];
+    auto start = std::chrono::high_resolution_clock::now();
+    mergeSort(testArr, 0, num - 1);
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    Checker(testArr, num, "");
+    std::cout << "mergeSort: " << elapsed.count() << "\n";
+
+
+    for (int i = 0; i < num; ++i)
+        testArr[i] = mainUnsortedArr[i];
+    start = std::chrono::high_resolution_clock::now();
+    parallelMergeSort(testArr, 0, num - 1);
+    end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    Checker(testArr, num, "");
+    std::cout << "parallelMergeSort: " << elapsed.count() << "\n";
+
+
+    for (int i = 0; i < num; ++i)
+        testArr[i] = mainUnsortedArr[i];
+    start = std::chrono::high_resolution_clock::now();
+    parallelMergeSort_2(testArr, 0, num - 1);
+    end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    Checker(testArr, num, "");
+    std::cout << "parallelMergeSort2: " << elapsed.count() << "\n";
+
+
+    for (int i = 0; i < num; ++i)
+        testArr[i] = mainUnsortedArr[i];
+    start = std::chrono::high_resolution_clock::now();
+    parallelMergeSort_3(testArr, 0, num - 1);
+    end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    Checker(testArr, num, "");
+    std::cout << "parallelMergeSort3: " << elapsed.count() << "\n";
+
+
+    /*
+    //int arr[6] = {1,3,6,2,5,7};
+    //int arr[7] = {1,3,4,6,2,5,7};
+
+    const int arrSize = 8;
+    int arr[arrSize] = {1,3,4,7,2,5,6,8};
+    int arr2[arrSize](0);
+
+    //mergeMT(arr, arr2, 0, 2, 3, 5, 0);
+    //mergeMT(arr, arr2, 0, 3, 4, 6, 0);
+    //mergeMT(arr, arr2, 0, 3, 4, 7, 0);
+    int mid = (arrSize - 1) / 2 ;
+    mergeMT(arr, 0, mid, mid + 1, arrSize - 1, 0);
+    //mergeMT(arr, arr2, 0, mid, mid + 1, arrSize - 1, 0);
+
+
+    for (auto var : arr2)
+        std::cout << var << " ";*/
+}

@@ -1,0 +1,74 @@
+На windows память другого процесса читают через WinAPI:
+1) Найти нужный процесс (через имя или PID)
+2) Получить  HANDLE к процессу (OpenProcess)
+3) Вызвать ReadProcessMemory, указав адрес.
+
+Важные моменты: ReadProcessMemory требует точного адреса (его нужно знать). Адреса зависят от ASLR (Address Space Layout Randomization) - они разные при каждом запуске. Чтобы побороть это нужно вычислять адрес относительно базового
+адреса модуля (GetModuleBaseName + MODULEENTRY32.modBaseAddr). Иногда процесс нужно запускать с админскими правами, иначе доступ к памяти будет запрещён. Разрядность имеет значение.
+
+
+#################
+Попробуем самый базовый вариант, когда мы знаем и PID процесса, и адресс переменной, которую нужно прочитать. 
+
+Код программы Target, из которой мы должны прочитать значение переменной:
+#include <iostream>
+
+int main() {
+    const char* str = "123456789Test";				// У нас есть переменная которую мы должны прочитать в другой программе
+    int exit = 1;
+
+    std::cout << "adress str = " << &str << '\n';			// Мы любезно выводим адрес этой переменной
+
+    while(exit) {						// Программа продолжает работать пока мы её не выключим
+        std::cout << "Power off? 0-Yes, 1-no/n ";
+        std::cin >> exit;
+        if(exit < 0 || exit > 1) {
+            std::cout << "Incorrect input, terminate the programm.";
+            std::terminate();
+        }
+    }
+}
+
+
+###
+Код программы Reader, с помощью которой мы должны прочитать значение переменной:
+#include <iostream>
+#include <windows.h>
+
+int main()
+{
+    DWORD pid = 11268;                          				// PID процесса, который нужно прочитать
+    LPCVOID address = (LPCVOID)0xf6acdffa18;    			// Адрес на указатель на строковые данные
+    uintptr_t strPtr = 0;                       				// Переменная для записи значения указателя на строковые данные
+    HANDLE processHandle;                       				// Процесс
+    //Адрес const char* str != адрес самой строки
+
+    // Открываем процесс
+    processHandle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (processHandle == NULL) {
+        std::cerr << "Error open process/n";
+        return 1;
+    }
+
+    // По указателю address читаем значение этого указателя на строковые данные и сохраняем это в переменную strPtr
+    if (ReadProcessMemory(processHandle, address, &strPtr, sizeof(strPtr), NULL)) {
+        char buffer[256] = {0};
+
+        // По этому указателю читаем сами данные нашей строки
+        ReadProcessMemory(processHandle, (LPCVOID)strPtr, buffer, sizeof(buffer) - 1, NULL);
+        std::cout << "Successfully read the string: " << buffer << '\n';
+    }
+    else {
+        std::cout << "ReadProcessMemory error: " << GetLastError() << '\n';
+    }
+
+    CloseHandle(processHandle);
+    return 0;
+}
+
+В результате по PID процесса программы Target и адресу переменной const char* str мы можем прочитать её значение с помощью программы Reader. Следует понимать что переменная const char* str хранит указатель на строковый литерал
+"123456789Test", т.е. сам текст "123456789Test" хранится в отдельной области памяти (обычно .rdata). Получается адрес str не равняется адресу  с данными самой строки. Поэтому мы сначала должны прочитать указатель const char*, который лежит
+в переменной str, а уже потом прочитать данные строки по этому указателю.
+
+
+
