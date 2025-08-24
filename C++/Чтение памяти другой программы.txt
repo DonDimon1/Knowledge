@@ -7,7 +7,11 @@
 адреса модуля (GetModuleBaseName + MODULEENTRY32.modBaseAddr). Иногда процесс нужно запускать с админскими правами, иначе доступ к памяти будет запрещён. Разрядность имеет значение.
 
 
-#################
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+
 Попробуем самый базовый вариант, когда мы знаем и PID процесса, и адресс переменной, которую нужно прочитать. 
 
 Код программы Target, из которой мы должны прочитать значение переменной:
@@ -66,9 +70,551 @@ int main()
     return 0;
 }
 
-В результате по PID процесса программы Target и адресу переменной const char* str мы можем прочитать её значение с помощью программы Reader. Следует понимать что переменная const char* str хранит указатель на строковый литерал
-"123456789Test", т.е. сам текст "123456789Test" хранится в отдельной области памяти (обычно .rdata). Получается адрес str не равняется адресу  с данными самой строки. Поэтому мы сначала должны прочитать указатель const char*, который лежит
-в переменной str, а уже потом прочитать данные строки по этому указателю.
+В результате по PID процесса программы Target и адресу переменной const char* str мы можем прочитать её значение с помощью программы Reader. Следует понимать что переменная const char* str это указатель, который хранится в сегменте
+.data, и указывает он на строковый литерал "123456789Test", т.е. этот указатель указывает на адрес самой строки. Адрес этого указателя (&str) и всего сегмента .data меняется при каждом перезапуске из-за ASLR. Сама строка (литерал) 
+"123456789Test" хранится в отдельной области памяти (обычно в сегменте .rdata exe-шника) (rdata это read-only data). Получается адрес str не равняется адресу с данными самой строки. В данной реализации программы Target мы выводим в 
+консоль адрес указателя (&str), поэтому мы сначала должны прочитать указатель const char*, который лежит в переменной str, а уже потом прочитать данные строки по этому указателю. Если мы изначально получим адрес самой строки то 
+программу Reader нужно будет немного упростить и написать только один ReadProcessMemory. 
+
+
+Код программы Target, который даёт два адреса: 1-ый на саму строку литерал), 2-ой на указатель const char* str.
+#include <iostream>
+
+int main() {
+    const char* str = "123456789Test";
+    int exit = 1;
+
+    while(exit) {
+
+        std::cout << "\nstr (string adress) = " << (void*)str << '\n';		// Адрес самой строки (литерала)
+        std::cout << "&str (pointer adress) = " << (void*)&str << "\n\n";		// адрес указателя const char* str
+
+        std::cout << "Power off? 0-Yes, 1-no/n ";
+        std::cin >> exit;
+        if(exit < 0 || exit > 1) {
+            std::cout << "Incorrect input, terminate the programm.";
+            std::terminate();
+        }
+    }
+}
+
+
+###
+Код программы Reader, с помощью которой мы должны прочитать значение самой строки:
+#include <iostream>
+#include <windows.h>
+
+int main()
+{
+    DWORD pid = 12416;                          				// PID процесса, который нужно прочитать
+    LPCVOID address = (LPCVOID)0x7ff7d0464000;    			    // Адрес на саму строку (Литерал)
+    HANDLE processHandle;                       				// Процесс
+
+    // Открываем процесс
+    processHandle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (processHandle == NULL) {
+        std::cerr << "Error open process/n";
+        return 1;
+    }
+
+    // По указателю address читаем значение самой строки
+    char buffer[256] = {0};
+    if (ReadProcessMemory(processHandle, address, buffer, sizeof(buffer) - 1, NULL)) {
+        std::cout << "Successfully read the string: " << buffer << '\n';
+    }
+    else {
+        std::cout << "ReadProcessMemory error: " << GetLastError() << '\n';
+    }
+
+    CloseHandle(processHandle);
+    return 0;
+}
+
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+
+Мы можем находить PID по имени процесса, вместо того чтобы вручную указывать его:
+
+#include <iostream>
+#include <windows.h>
+#include <tlhelp32.h>
+
+// Находим PID процесса по имени
+DWORD GetProcessIdByName(const wchar_t* processName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) {
+                CloseHandle(snapshot);
+                return pe.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+
+    CloseHandle(snapshot);
+    return 0;
+}
+
+int main()
+{
+    //DWORD pid = 11268;                          				// PID процесса, который нужно прочитать
+    DWORD pid = GetProcessIdByName(L"Target.exe");	
+
+///... Далее код не изменился
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+
+
+Если программа Target не изменяется, то и адресс строки мы тоже можем найти автоматически с помощью смещения (offsets) и модульную базу (base address). Поскольку строка "123456789Test" это литерал, она жёстко зашита в бинарь и 
+кладётся в сегмент .rdata (read-only data) исполняемого файла. При компиляции бинарь всегда кладёт эту строку в одинаковое место внутри самого модуля Target.exe. Но при каждом запуске программы, Windows грузит Target.exe в разное 
+место из-за ASLR, однако внутри этого модуля (Target.exe) смещение (offset) нашей строки относительно базового адреса модуля остаётся одинаковым. Получается что абсолютный адрес = BaseAddress(Target.exe) + Offset. Однако в первый 
+раз нам нужно узнать offset нашей строки вручную с помощью x64dbg, Cheat Engine, IDA Free, Ghidra или иначе. Например, если адрес строки "123456789Test" = 0x7FF6_12346020, а базовый адрес модуля = 0x7FF6_12345000, тогда 
+offset = 0x6020.
+
+Код программы Reader: При первом запуске программа требует адрес строкового литерала и сохраняет в файлик offset.txt смещение относительно базового модуля. При последующих запусках программа берёт смещение из этого файла.
+#include <iostream>
+#include <windows.h>
+#include <tlhelp32.h>
+#include <fstream>
+
+// Находим PID процесса по имени
+DWORD GetProcessIdByName(const wchar_t* processName) {
+    //DWORD pid = 0;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) {
+                CloseHandle(snapshot);
+                return pe.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+
+    CloseHandle(snapshot);
+    return 0;
+}
+
+uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    MODULEENTRY32W me;
+    me.dwSize = sizeof(me);
+    if (Module32FirstW(snapshot, &me)) {
+        do {
+            if (!_wcsicmp(me.szModule, moduleName)) {
+                CloseHandle(snapshot);
+                return (uintptr_t)me.modBaseAddr;
+            }
+        } while (Module32NextW(snapshot, &me));
+    }
+    CloseHandle(snapshot);
+    return 0;
+}
+
+int main()
+{
+    const wchar_t* exeName = L"Target.exe";
+    DWORD pid = GetProcessIdByName(exeName);                    		// PID процесса, который нужно прочитать
+    if (!pid) { std::cerr << "Process not found\n"; return 1;}
+
+    uintptr_t base = GetModuleBaseAddress(pid, exeName);
+    if (!base) { std::cerr << "Module not found\n"; return 1;}
+
+    uintptr_t strOffset = 0;
+    std::ifstream in("offset.txt");
+
+    if (!in.good()) {					
+        // Первый запуск
+        std::cout << "First start! Enter string addres \(hex): ";
+        uintptr_t strAddr;
+        std::cin >> std::hex >> strAddr;
+
+        strOffset = strAddr - base; // Вычисляем смещение
+        std::ofstream out("offset.txt");
+        out << std::hex << strOffset;
+        out.close();
+
+        std::cout << "Offset save: " << std::hex << strOffset << "\n";
+    }
+    else {
+        // Последующие запуски
+        in >> std::hex >> strOffset;
+        in.close();
+        std::cout << "Load offset: " << std::hex << strOffset << "\n";
+    }
+
+    uintptr_t strAddr = base + strOffset;
+    HANDLE processHandle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    char buffer[256] = {0};
+
+    if (ReadProcessMemory(processHandle, (LPCVOID)strAddr, buffer, sizeof(buffer) - 1, NULL)) {
+        std::cout << "Successfully read the string: " << buffer << '\n';
+    }
+    else {
+        std::cout << "ReadProcessMemory error: " << GetLastError() << '\n';
+    }
+
+    CloseHandle(processHandle);
+    return 0;
+}
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+
+Разные переменные могут храниться в разных областях памяти. Главные факторы влияющие на место их размещения это время жизни и инициализация. Существуют несколько секций PE-модуля (exe/dll) на Windows:
+- .text - машинный код
+- .rdata - read-only данные: строковые литералы, константы и т.п.
+- .data - инициализированные глобальные/статические переменные
+- .bss - неинициализированные глобальные/статические переменные 
+- .tls - thread-local storage (на поток). 
+- служебные (.idata, .pdata, ...)
+
+.rdata, .data, .bss находятся в фиксированных местах внутри модуля .exe. Стек обычно растёт вниз (адреса уменьшаются), куча обычно растёт вверх (адреса увеличиваются). 
+
+
+Примеры:
+ Запись в коде			Где лежит сам объект		Где лежит значение
+-------------------------------------------------------------------------------------------------------------------------------------------
+1) int x = 43; (глобальный/static)	             .data			сам 42 лежит прямо там же
+-------------------------------------------------------------------------------------------------------------------------------------------
+2) int x; (глобальный/static без 	             .bss			заполняется мусором (или стандартным значением)
+инициализации)		
+-------------------------------------------------------------------------------------------------------------------------------------------
+3) const int C = 7; (глобальный/static)      чаще .rdata (т.к. read-only)		значение там же
+-------------------------------------------------------------------------------------------------------------------------------------------
+4) int x; (локальный в функции)	             стек			значение в стеке
+-------------------------------------------------------------------------------------------------------------------------------------------
+5) int* p = new int(42);		сам указатель p - там где		значение в куче (heap)
+				объявлен (обычно стек)
+-------------------------------------------------------------------------------------------------------------------------------------------
+6) __declspec(thread) int t;		TLS (на поток)			в TLS-области потока
+-------------------------------------------------------------------------------------------------------------------------------------------
+7) const char* s = "hello";		указатель s - стек или		литерал "hello" - .rdata
+				.data (зависит от static) 
+-------------------------------------------------------------------------------------------------------------------------------------------
+8) char buf[100];			buf - стек				введённые байты - в стеке
+     std::cin >> buf;							(внутри buf)
+-------------------------------------------------------------------------------------------------------------------------------------------
+9) std::string s;			объект s - стек			содержимое: иногда в куче,
+     std::cin >> s;							иногда прямо внутри объекта
+								s (см. SSO)
+-------------------------------------------------------------------------------------------------------------------------------------------
+
+
+Разбор типичных случаев:
+1) const char* str = "123456789Test";
+Литерал "123456789Test" лежит в .rdata нашего Target.exe. Его смещение (RVA - Relative Virtual Address) от базы модуля стабильно между запусками одной и той же сборки. 
+Переменная str - это указатель. Если объявлена внутри main то лежит на стеке. Если static/глобальная сам указатель в .data (а если ещё и const, компилятор может поместить его в .rdata).
+Поэтому: адрес литерала можно восстанавливать как base(Target.exe) + offset, где offset - один раз измеренный RVA. Адрес самого указателя &str не стабилен (для локальной переменной он на стеке и изменяется каждый запуск).
+
+2) Ввод через cin
+Ничего в .rdata тут не появляется. Варианты:
+a) 
+char buf[100]; 
+std::cin >> buf; 
+Здесь байты пишутся в стек, в массив buf;
+
+b)
+std::string s; 
+std::cin >> s; 
+Объект s хранится на стеке. Хранение данных может отличаться из-за SSO (Small String Optimization): 1) короткие строки (до 15 символов) хранятся внутри самого объекта std::string, что означает, что 
+они храняться на стеке, если s локальный. 2) длинные строки - в куче. 
+
+с)
+auto p = new char[...]; 
+std::cin >> p; 
+сами данные храняся в куче, указатель p - лежит там, где объявлен.
+
+3) Остальные примеры
+a) Локальные переменные int x; double y; Foo obj; хранятся на стеке
+b) Глобальные/статические инициализированные хранятся в .data или в .rdata, если объект строго read-only и компилятор может это гарантировать.
+c) Глобальные/статические неинициализированные хранятся в .bss.
+d) Динамические (new) хранятся на куче.
+e) TLS (__declspex(thread)) хранятся в TLS, это отдельная область на поток.
+
+Вывод: если программа переприсваивает str на данные из cin, (например str = buf или str = s.c_str()), то str начнёт указывать не на .rdata, а не стек или кучу, и тогда трюк с offset от базы уже не работает. Если переменная/указатель/данные 
+живут не в модуле, а на стеке/куче, то у них нет стабильного RVA и адрес будет каждый раз новый, и тогжа нужны другие техники, например скан стека интересующих потоков, скан куч(и) на ASCIIZ, перехват operator new/malloc, хуки 
+(инъекция DLL/детурсы) на места присваивания. 
+
+
+###
+Нюансы и частые ловушки:
+1) str и &str: значение str - это адрес полезных данных, &str - адрес ячейки с указателем (совершенно другой адрес. для локальной переменной это стек. обновляется каждый перезапуск).
+2) Разрядность: Reader и Target должны быть оба x64 или оба x86, иначе ReadProcessMemory теоретически работает, но адреса/структуры не совпадают, и мы ничего не найдём.
+3) SSO у std::string и возможные оптимизации у других типов: короткие строки (обычно до 15 байт на x64 libstdc++) могут хранится внутри объекта std::string. Если этот объект локальный, фактически данные хранятся на стеке.
+При изменении длины хранение данных может переключиться на кучу.
+4) Слияние литералов: компилятор может дедуплицировать одинаковые строковые литералы ("string pooling"). Если у нас в коде будет пять раз написан литерал "OK", то в .rdata будет один экземпляр, на который укажут пять 
+разных указателей.
+5) Модули: если код/строки находятся в DLL, искать базу нужно у той DLL, а не у Target.exe, потому что RVA привязан к своему модулю.
+6) Оптимизации: компилятор может упростить/убрать временные переменные. 
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+
+.rdata
+
+- .rdata - read-only данные: строковые литералы, константы и т.п. Компилятор туда кладёт константные данные, которые не должны изменяться в процессе работы и нужны на этапе выполнения. .rdata загружается в память 
+вместе с программой и обычно имеет атрибут READONLY.
+
+Типичные вещи которые хранятся в .rdata:
+1) Строковые литералы "Hello world"
+2) Константные массивы const int arr[5] = {1,2,3,4,5}
+3) vtable классов (таблицы виртуальных методов)
+4) Различные RTTI данные (для dynamic_cast, typeid)
+5) Иногда строки форматов ("%d", "%s\n")
+
+Что можно делать с .rdata
+1) Сканировать строковые литералы. 
+Можно обойти всю секцию .rdata в процессе и прочитать все строки (ASCIIZ и UTF-16). Это типичный приём реверс-инжиниринга (например в IDA Pro или Cheat Engine). Ищем интересные строки, находим где они используются 
+и оттуда восстанавливаем логику программы. Например в нашем Target строка "123456789Test" всегда лежит в .rdata, и можно найти её простой строковой сигнатурой.
+
+2) Поиск по сигнатурам.
+В .rdata можно искать не только строки, но и массивы констант. Например: const int arr[3] = { 10, 20, 30}; Эти числа в бинарнике будут лежать подряд в .rdata. Читер/реверсер может просканировать .rdata и найти их как 
+сигнатуру [0x0A, 0x14, 0x1E].
+
+3) Использование .rdata для "отпрыгивания"
+Если мы знаем строку или константу в .rdata, то по её адресу можно найти смежный код, который эту строку использует, например:
+printf("Hello world"); 
+строка "Hello world" лежит в .rdata. в .text следующий код: mov ecx, offset .rdata:HelloWorld. Найдя строку, можно найти все места в коде, где она используется.
+
+
+###
+Код программы Reader: он сканирует весь файл .rdata программы Target.exe. 
+#include <iostream>
+#include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>
+#include <string>
+#include <vector>
+
+
+// Находим PID процесса по имени
+DWORD GetProcessIdByName(const wchar_t* processName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) {
+                CloseHandle(snapshot);
+                return pe.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+
+    CloseHandle(snapshot);
+    return 0;
+}
+
+bool DumpRdataStrings(DWORD pid) {
+    // Получаем дескриптор процесса
+    HANDLE processHandle = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (processHandle == NULL) {
+        std::cerr << "Error open process\n";
+        return false;
+    }
+
+    // Ищем и загружаем модуль (exe)
+    HMODULE hMod = nullptr;
+    DWORD cbNeeded = 0;
+    // Получаем список модулей процесса (exe + dll). Первый элемент hMod - это база исполняемого файла (адрес, с которого
+    // в памяти загружен exe-шник). Это наша отправная точка.
+    if (!EnumProcessModules(processHandle, &hMod, sizeof(hMod), &cbNeeded)) {
+        std::cerr << "Don't get address base module\n";
+        CloseHandle(processHandle);
+        return false;
+    }
+
+    // Читаем заголовок PE
+    // IMAGE_DOS_HEADER это самый первый заголовок PE-файла (старый формат DOS с полем e_lfanew, которое хранит
+    // смещение до NT-заголовка
+    IMAGE_DOS_HEADER dosHeader{};
+    ReadProcessMemory(processHandle, hMod, &dosHeader, sizeof(dosHeader), nullptr);
+    // IMAGE_NT_HEADERS это современный заголовок PE-файла для 64-битных программ. В нём есть
+    // FileHeader.NumberOfSections - это количество секций (.text, .rdata, .data и т.д.).
+    // Так же есть OptionalHeader.SizeOfOptionalHeader - размер дополнительного заголовка (после него
+    // начинаются секции).
+    IMAGE_NT_HEADERS ntHeaders{};
+    ReadProcessMemory(processHandle, (BYTE*)hMod + dosHeader.e_lfanew, &ntHeaders, sizeof(ntHeaders), nullptr);
+
+    // Ищем секцию .rdata
+    // e_lfanew - начало NT-зашоловка. sizeof(DWORD) - сигнатура "PE\0\0",
+    // sizeof(IMAGE_FILE_HEADER) - заголовок файла, SizeOfOptionalHeader - размер доп. инфы
+    // После этого всего начинается массив IMAGE_SECTION_HEADER[].
+    IMAGE_SECTION_HEADER secHeader{};
+    DWORD secOffset = dosHeader.e_lfanew + sizeof(DWORD) +
+                      sizeof(IMAGE_FILE_HEADER) + ntHeaders.FileHeader.SizeOfOptionalHeader;
+
+    // Перебираем все секции и ищем секцию .rdata
+    bool found = false;
+    for (int i = 0; i < ntHeaders.FileHeader.NumberOfSections; ++i) {
+        ReadProcessMemory(processHandle, (BYTE*)hMod + secOffset + i * sizeof(IMAGE_SECTION_HEADER),
+                          &secHeader, sizeof(secHeader), nullptr);
+
+        if (strncmp((char*)secHeader.Name, ".rdata", 6) == 0) {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        std::cerr << ".rdata section not found\n";
+        CloseHandle(processHandle);
+        return false;
+    }
+
+    // Адрес секции в памяти.
+    // У секции есть поля: VirtualAddress - смещение в памяти от hMod. SizeOfRawData - размер секции.
+    BYTE* rdataAddr = (BYTE*)hMod + secHeader.VirtualAddress;
+    DWORD rdataSize = secHeader.Misc.VirtualSize;
+    // Зная это, можно вызвать ReadProcessMemory, и тогда buffer будет содерджать все данные секции .rdata.
+    std::vector<char> buffer(rdataSize);
+    if (!ReadProcessMemory(processHandle, rdataAddr, buffer.data(), rdataSize, nullptr)) {
+        std::cerr << "Failed to read .rdata\n";
+        CloseHandle(processHandle);
+        return false;
+    }
+
+    // Поиск строк (ASCII)
+    std::string current;
+    for (size_t i = 0; i < buffer.size(); ++i) {
+        char c = buffer[i];
+        if (isprint((unsigned char)c)) {
+            current.push_back(c);
+        }
+        else {
+            if (current.size() >= 4) { // минимальная длинна символов, после чего мы считаем что это строка
+                std::cout << "Found string: " << current << "\n";
+            }
+            current.clear();
+        }
+    }
+
+    CloseHandle(processHandle);
+    return true;
+}
+
+int main() {
+    DWORD pid = GetProcessIdByName(L"Target.exe");
+    if (!DumpRdataStrings(pid)) {
+        std::cerr << "Error while scanning .rdata\n";
+    }
+}
+
+###
+Этот код выводит в консоль вообще всё что есть в .rdata: константные строки, отладочные имена, RTTI-таблицы, типы и т.д. Т.е. если мы хотим что-то конкретное, то нам нужно как то это распарсить. Например, чтобы найти 
+строки, нам нужно найти массив байт, заканчивающийся 0x00, т.е. символом null-terminated. Логика самого примитивного парсера строк м.б. такая: мы идём по байтам секции и если встречаем последовательность
+печатаемых символов ('A'...'Z', 'a'...'z'), цифр, знаков препинания, и если эта последовательность например больше 3-4 символов, то мы будем считать это строкой, и считывать её до символа 0x00.
+
+С массивами сложнее. Если у нас массив строк const char* arr[], то в .rdata будут лежать УКАЗАТЕЛИ на строки (адресф внутри .rdata). Нужно проверять, указывает ли значение на область .rdata и там ли лежит строка.
+Если у нас массив чисел const int arr[] = {1,2,3}, то они тоже могут быть .rdata, но компилятор иногда кладёт их и в .rdata. Мы можем искать подряд идущие 4-байтовые значения (для int), которые выглядят как числа. Мы можем 
+искать массивы с любым типом данных, не только int. Однако для эффективного поиска нам нужно знать, то что мы ищем.
+
+###
+Код программы Target, из которой мы должны прочитать только осмысленные строки и константные массивы:
+#include <iostream>
+
+int main() {
+    const char* str = "123456789Test";
+    const char* str2 = "Hello world!";
+    const char* str3 = "String .rdata Scaner";
+
+    const int arr[] = {1,2,3,4,5,5,4,3,2,1};
+    system("pause");
+}
+
+Код программы Reader: Мы сканируем .rdata побайтно. Для массива int мы отфильтровываем разумные данные.
+
+bool isPrintable(char c) {
+    return (c >= 32 && c < 127);
+}
+
+void scanRdata(HANDLE hProc, BYTE* baseAddr, SIZE_T size) {
+    std::vector<char> buffer(size);
+    if (!ReadProcessMemory(hProc, baseAddr, buffer.data(), size, nullptr)) {
+        std::cerr << "Failed to read .rdata\n";
+        CloseHandle(hProc);
+        return;
+    }
+
+    // ---- Поиск строк ----
+    std::cout << "\n=== STRINGS ===\n";
+    for (size_t i = 0; i < size;) {
+        if (isPrintable(buffer[i])) {
+            size_t start = i;
+            while (i < size && isPrintable(buffer[i])) ++i;
+            if (i < size && buffer[i] == 0 && (i - start) >= 4) {
+                std::string s(buffer.data() + start, buffer.data() + i);
+                std::cout << "[string:] " << s << "\n";
+            }
+        } ++i;
+    }
+
+    // ---- Поиск массивов int ----
+    std::cout << "\n=== Array int ===\n";
+    for (size_t i = 0; i + sizeof(int) <= buffer.size();) {
+        int* arr = (int*)(buffer.data() + i);
+
+        int count = 0;
+        while (i + count * 4 < buffer.size()) {
+            int val = arr[count];
+            if (val <= 0 || val > 1000000) break;   // грубая фильтрация
+            ++count;
+        }
+
+        if (count >= 3) {
+            std::cout << "[Array int] (offset 0x" << std::hex << i << "): " << std::dec;
+            for (int j = 0; j < count; ++j) {
+                std::cout << arr[j] << " ";
+            }
+            std::cout << "\n";
+
+            i += count * 4;
+        }
+        else i += 4;
+    }
+}
+
+bool DumpRdataStrings(DWORD pid) {
+    // ...
+    scanRdata(processHandle, rdataAddr, rdataSize);
+
+    CloseHandle(processHandle);
+    return true;
+}
+
+// Дальше тоже самый код
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
 
 
 
