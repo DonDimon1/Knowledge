@@ -212,7 +212,7 @@ DWORD GetProcessIdByName(const wchar_t* processName) {
 
 uintptr_t GetModuleBaseAddress(DWORD pid, const wchar_t* moduleName) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
-    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+    if (snapshot == INVALID_HANDLE_VALUE) return 0;
 
     MODULEENTRY32W me;
     me.dwSize = sizeof(me);
@@ -615,6 +615,1747 @@ bool DumpRdataStrings(DWORD pid) {
 ##################################################
 --------------------------------------------------------------------------
 ##################################################
+Stack (Стек)
+
+1) Что такое стек потока и где его границы
+У каждого потока есть свой собственный стек - отдельный непрерывный диапазон адресов [StackLimit ... StackBase]. Стек растёт вниз, это означает что при входе в функцию указатель стека уменьшают, при выходе увеличивают. 
+Текущий указатель стека: ESP (x86), RSP (x64). Границы стека лежат в TEB (Thread Environment Block) -> NtTib.StackLimit и NtTib.StackBase. На Windows нет "red zone" как в SysV на Linux, поэтому писать и читать ниже RSP нельзя, потому что там
+quard-страница. Реально "живой" участок, который имеет смысл сканировать это участок [RSP ... StackBase] - текущий кадр и кадры вызывающих функций. Ниже RSP памяти "для будующего роста" и трогать её не нужно. Практически, чтобы 
+сканировать, поток лучше приостановить, получить контекст (ESP/RSP) и прочитать диапазон [RSP ... StackBase]. На x64/Win ещё нужно учесть "теневое пространство" (shadow space), о нём ниже.
+
+Стек - это механизм процессора. Он есть всегда, какой бы ЯП не использовался, однако интерпретация данных хранящихся на стеке зависит от ЯП.
+
+2) Что хранится на стеке и как это выглядит
+В общих чертах - всё "временное" для вызова функций:
+
+Всегда встречающиееся:
+- адреса возврата (ret-адрес) - лежит на вершине текущего кадра (x86), на 64 сохраняется вызовом, но доступен в кадре вызывающей. 
+- сохранённый базовый указатель (EBP/RBP) - если компилятор кго использует (без FPO).
+- локальные переменные функции: простые типы (int, double), массивы на стеке (char buf[256]), встроенные объекты (например std::string, std::vector - сам их объект хранится на стеке, а полезные данные могут быть в куче).
+- выделенные под выровненность "пустые" байты (padding), spill регистров, временные значения.
+
+Аргументы функций:
+- x86 (decl/stdcall/fastcall/thicall): аргументы, как правило, лежат на стеке (порядок справа-налево). Возврат через EAX. Чистит стек либо вызывающая, либо вызываемая (зависит от соглашения).
+- x64/Windows: первые 4 аргумента в RCX, RDX, R8, R8, остальные в стеке. Caller обяхан выделить "home area"/shadow space - 32 байта в стеке перед каждым вызовом (даже если регистров достаточно). Стек должен быть выровнен на 16 байт
+в момент CALL.
+
+Строки и классы:
+- char buf[256]; - контент прямо на стеке (виден как ASCIIZ-последовательность).
+- const char* p - на стеке только указатель. Он может указывать в .rdata (строковый литерал), в кучу (динамика), в стек (например, на buf).
+- std::string s; - сам объект на стеке, за счёт SSO короткая строка хранится внутри объекта, а длинная в кучие, при этом на стеке хранятся ptr/size/capacity. 
+- любой полиморфный объект на стеке начинается с vptr (указатель на vtable в .rdata). Это полезный маркер при распознавании "настоящих" объектов без символов.
+
+Специфика x86: SEH
+На x86 цепочка SEH-обработчиков - связанный список структур в стеке (EXCEPTION_REGISTRATION). Это тоже "данные" на стеке. На x64 SEH таблиц-ориентированная, в стеке списка нет.
+
+Т.е. стек используется как рабочая память для вызовов функций.
+
+3) Что именно мы можем прочитать со стека чужого процесса
+Почти всё, что туда положил компилятор/код, если оно в живой части:
+- Значения локальных переменных простых типов как наборы байтов. Однако определить что это за тип именно int/float/double и т.д. без символов сложно, нужны эвристики/контекст.
+- Статические массивы на стеке видны как непрерывные байты. Для char[] это строки, для int[] последовательности 4-байтовых чисел.
+- Объекты C++ внутри кадра - заголовки (vptr, поля), а вот тело может быть в куче.
+- Аргументы функций (в стеке) особенно на x86, и "хвостовые" аргументы на x64(после первых четырёх).
+- Указатели на другие области (куча, .rdata, стек): можно проверить валидность указателя (VirtualQueryEx) и пойти по нему и прочитать его.
+- Адреса возврата - позволяют восстановить бек-трейс (стек вызовов) сопоставить с .text модулей и понять где мы находимся.
+- SEH-записи (x86), stack cookie (MSVC/GS) - не путать их с полезными данными.
+
+Важно: на стеке часто остаются "слепки" старых кадров (память не нулится при выходе из функции). Поэтому в области между текущим RSP и StackBase можно увидеть и актуальные данные, и уже "мёртвые" данные от вызвавшиз функций. Это и
+плюс (можно найти "следы") и минус (легко принять мусор за истину).
+
+4) Почему потоки критичны
+Стек принадлежит потоку, а не процессу. Если наша целевая локальная переменная в "главном" потоке, мы её не найдём на стеке воркер-потока. Значит надоперечислить все потоки процесса и читать каждый стек. Для корректного снимка стека
+поток лучше приостановить, иначе он двигает RSP и портит консистентность. Но:
+- Приостанавливать нужно минимально и обязательно возобновлять, иначе есть риски дедлоков/лагов у цели.
+- Не преостанавливать все потоки "навечно" - GUI/таймеры/IPC могут замёрзнуть.
+
+5) Как это связано с соглашениями вызова и кадрами
+a) x86 (32-бит) Стандартный кадр (без оптимизаций):
+push ebp
+mov ebp, esp
+sub esp, locals_size
+...
+mov esp, ebp
+pop ebp
+ret argbytes
+
+Макет кадра:
+[ebp+8] 1-ый аргумент
+[ebp+12] 2-ой аргумент
+...
+[ebp+4] адрес возврата
+[ebp] сохранённый ebp
+[ebp-...] локальные (массивы, объекты, spill)
+
+Без кадра (FPO, оптимизации) ориентира EBP нет, стек "плоский" и искать сложнее.
+
+b) x64/Windows
+- Аргументы 1-4 в RCX, RDX, R8, R9; caller резервирует 32 байта shadow space на стеке перед CALL. Calle может туда проливать аргументы. Остальные аргументы - в стеке.
+- Стек выровнен на 16 байт в момент CALL.
+- Кадр часто без "жёсткого" RBP (frame-pointer omission), но Windows хранит unwind-информацию дл яEH/профилирования. Ею пользуются отладчики. Для "сырых" чтений нам важнее просто знать, что возле RSP есть теневая область и локалы ниже
+её.
+
+Вывод: "где лежит переменная" зависит от компилятора/опций/оптимизаций. Но локальные массивы/объекты почти всегда на стеке, а литералы и vtable в .rdata (их можно узнавать по указателям со стека).
+
+6) Что реально можно распознать и как
+Без PDB-символов мы не узнаем имён, но можно распознать классы данных по признакам:
+a) Строки:
+- ASCIIZ в стеке: непрерывная полоса печатных байтов, за которой 0x00.
+- UTF-16: чередующиеся печатные WCHAR с завершающим WCHAR(0). Часто половина байтов - нули, если текст латиница.
+- Указатели нас строки: 8/4-байтовые значения в стеке, которые указывают в .rdata/кучу. Проверяем VirtualQueryEx, читаем до нуля, фильтруем печатаемость.
+
+b) Массивы:
+- char[] - как строки (если текстовые) или как пакет байтов.
+- int[]/float[] - последовательности одинакового размера элементов, иногда с "разумными" значениями. Для определения нужны эвристики: длина >=N, значения в диапазоне, отсутствие NaN/Inf для float, и т.д.
+
+c) Объекты C++:
+- В начале часто vptr -> указывает в .rdata (таблица виртуальных функций). Это маркер полиморфного объекта.
+- Рядом поля (указатели/числа). Можно валидировать, прощупывая указатели. 
+- Иногда удаётся "вывести тип" по структурам RTTI в .rdata, если их найти от vtable.
+
+d) Аргументы:
+- x86: находим по мсещению от EBP/ текущего ESP (если повезёт).
+- x64: теневая область (32 байта) + хвост в стеке - можно увидеть "следы" аргументов даже если они пришли в регистрах (callee проливает их в shadow space).
+
+e) Адреса возврата и код:
+- Любое значение, попадающее в .text одного из модулей - вероянтый ret-адрес. Цепочка таких адресов даёт стек вызовов, от которого можно оттолкнуться для поиска интересных локалов.
+
+7) Важные отличия и тонкости:
+- Разрядность должна совпадать: x64-битный ридер <-> 64-битная цель. Для WOW64 (32-битная цель на 64-битной ОС) есть отдельные API (Wow64GetThreadContext), иначе контекст не получить корректно.
+- Оптимизация: компилятор может держать значения только в регистрах или переиспользовать один и тот же слот для разных переменных (ложные срабатывания при опознавании).
+- Память не нулится: старые данные кадров выше по стеку остаются - это и помогает и мешает.
+- Защитные механизмы: /GS кладёт "cookie" в кадр, SEH-структуры (x86) - не путайте с данными.
+- Права доступа: OpenProcess может вернуть отказ (UAC, защищённые процессы). На таких целях чтение невозможно.
+- Чтение на лету: если не приостановить поток, можно получить рассинхрон (RSP сместился и мы читаем полкадра). Стараемся Suspend -> Read -> Resume и минимизируем паузу.
+
+8) Практические стратегии "как искать то, что нужно"
+a) Ищем локальные строки/буферы
+- Приостанавливаем поток(и), берём [RSP ... StackBase], ищем ASCIIZ/UTF-16 подпоследовательности длинной >= N.
+- Плюс ищем указатели в стеке, которые указывают в .rdata или читаемые heap-регионы (через VirtualQueryEx), и от них читаем строки.
+
+b) Ищем локальные указатели на литералы
+- Собираем все .rdata-диапазоны модулей -> сканируем стек на похожие на адреса значения, попадающие в эти диапазоны -> читаем строки по ним.
+
+c) Ищем массивы:
+- Сканируем стек по словам 4/8 байт -> кластеризуем непрерывные "разумные" значения (эвристики) -> выводим как массив до "сломавшего значение" места.
+- Для char[] - как строки или как hex-дампы.
+
+d) Привязка к вызовам
+- Вытаскиваем рет-адреса (значения, указывающие в .text модулей) -> по ним восстанавливаем примерный стек вызовов -> после каждого ret-адреса, как правило, идут сохранённые регистры и локалы кадра - это помогает локализировать
+"пакеты" данных.
+
+e) Если данные поступают через cin/формируются динамически
+- На стеке окажется буфер (если использовали char buf[]) или SSO-строка/хэдер контейнера; длинные строки уйдут в кучу, тогда на стеке - только указатель. Придётся дополнительно сканировать heap-регионы.
+
+9) Что нельзя гарантировать
+- Без символов нельзя точно сказат, что значение - именно переменной x. Мы оперируем байтами и эвристиками.
+- Типы (int/float/ptr) различаются только по косвенным признакам.
+- Компилятор может не класть некоторые вещи в сек вовсе (регистры, inlining, FPO).
+
+10) Чек лист для корректного чтения стека
+- Совпадение разрядности ридера и цели
+- Открыли процесс с PROCESS_VM_READ | PROCESS_QUERY_INFORMATION.
+- Нашли все потоки CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD)
+-Для каждого потока: OpenThread -> SuspendThread.
+- Получили TEB (NtQueryInformationThread(ThredBasicInformation)) -> прочитали StackBase/StackLimit.
+- Получили RSP/ESP (GetThreadContext или Wow64GetThreadContext).
+-Прочитали [RSP ... StackBase] через ReadProcessMemory.
+- (Опционально) Собрали .rdata-диапазоны всех модулей -> будем вылидировать по ним указатели.
+- Просканировали: inline-строки, UTF-16, указатели->строки, массивы/объекты по эвристикам.
+- ResumeThread и закрыли хэндлы. 
+
+
+
+Код программы Target, из которой мы должны прочитать значения массивов символов и чисел. Запускаем отдельный поток, для демонстрации того, что для каждого потока стек разный.
+
+#include <iostream>
+#include <thread>
+#include <cstring>
+
+void worker() {
+    bool exit = true;
+    int number[5] = {10, 20, 30, 40, 50};
+    char message[64];
+    strcpy(message, "Hellow from worker target stack!");
+
+    std::cout << "Worker thread running.\n";
+
+
+    while(exit) {						// Программа продолжает работать пока мы её не выключим
+        std::cout << "Power off? 0-Yes, 1-no/n ";
+        std::cin >> exit;
+        if(exit < 0 || exit > 1) {
+            std::cout << "Incorrect input, terminate the programm.";
+            std::terminate();
+        }
+    }
+}
+
+int main() {
+    int arr[5] = {5, 5, 5, 5, 5};
+    char message[64];
+    strcpy(message, "Hellow from main target stack!");
+
+    std::thread t(worker);
+    t.join();
+    return 0;
+}
+
+
+Код программы Target. Читаем стек каждого потока:
+#include <iostream>
+#include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>
+#include <string>
+#include <vector>
+#include <cctype>
+
+// -----------------------
+// Определение NT-структур (Минимальные части)
+// -----------------------
+typedef LONG NTSTATUS;
+
+typedef enum _THREADINFOCLASS {
+    ThreadBasicInformation = 0
+} THREADINFOCLASS;
+
+typedef struct _CLIENT_ID {
+    PVOID UniqueProcess;
+    PVOID UniqueThread;
+} CLIENT_ID;
+
+typedef struct _THREAD_BASIC_INFORMATION {
+    NTSTATUS ExitStatus;
+    PVOID TebBaseAddress;
+    CLIENT_ID ClientId;
+    KAFFINITY AffinityMask;
+    LONG Priority;
+    LONG BasePriority;
+} THREAD_BASIC_INFORMATION;
+
+/*
+typedef struct _NT_TIB {
+    PVOID ExceptionList;
+    PVOID StackBase;
+    PVOID StackLimit;
+    PVOID SubSystemTib;
+    PVOID FiberData;
+    PVOID ArbitraryUserPointer;
+    PVOID Self;
+} NT_TIB;*/
+
+// NtQueryInformationThread
+typedef NTSTATUS(WINAPI* pNtQueryInformationThread)(
+    HANDLE, THREADINFOCLASS, PVOID, ULONG, PULONG
+);
+
+// Структура для информации о стеке
+struct ThreadStackInfo {
+    DWORD tid;
+    PVOID stackBase;
+    PVOID stackLimit;
+};
+
+// -----------------------
+// Получаем границы стека
+// -----------------------
+bool GetThreadStackInfo(HANDLE hProcess, HANDLE hThread, ThreadStackInfo& info) {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) return false;
+
+    auto NtQueryInformationThread = (pNtQueryInformationThread) GetProcAddress(ntdll, "NtQueryInformationThread");
+    if (!NtQueryInformationThread) return false;
+
+    THREAD_BASIC_INFORMATION tbi{};
+    ULONG len = 0;
+    if (NtQueryInformationThread(hThread, ThreadBasicInformation, &tbi, sizeof(tbi), &len) != 0)
+        return false;
+
+    NT_TIB tib{};
+    if (!ReadProcessMemory(hProcess, tbi.TebBaseAddress, &tib, sizeof(tib), nullptr))
+        return false;
+
+    info.stackBase = tib.StackBase;
+    info.stackLimit = tib.StackLimit;
+    return true;
+}
+
+// -----------------------
+// Получаем все потоки
+// -----------------------
+std::vector<DWORD> GetProcessThread(DWORD pid) {
+    std::vector<DWORD> tids;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (hSnap == INVALID_HANDLE_VALUE)
+        return tids;
+
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    if (Thread32First(hSnap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid)
+                tids.push_back(te.th32ThreadID);
+
+        } while (Thread32Next(hSnap, &te));
+    }
+    CloseHandle(hSnap);
+    return tids;
+}
+
+// -----------------------
+// Поиск ASCII строк
+// -----------------------
+void ScanASCIIStrings(const BYTE* data, SIZE_T size, const BYTE* baseAddr) {
+    const int MIN_LEN = 4;
+    std::string current;
+
+    for (SIZE_T i = 0; i < size; ++i) {
+        char c = (char)data[i];
+        if (isprint((unsigned char)c))
+            current.push_back(c);
+        else {
+            if ((int)current.size() >= MIN_LEN) {
+                std::cout << "string@" << (const void*)(baseAddr + i - current.size())
+                    << " =\"" << current << "\"\n";
+            }
+            current.clear();
+        }
+    }
+}
+
+// -----------------------
+// Поиск массивов int
+// -----------------------
+void ScanIntArray(const BYTE* data, SIZE_T size, const BYTE* baseAddr) {
+    const int MIN_ARRAY = 3; // Минимум 3 int подряд для массива
+    std::vector<int> current;
+    SIZE_T startOffset = 0;
+
+    for (SIZE_T i = 0; i + sizeof(int) <= size; i += sizeof(int)) {
+        int val = *(int*)&data[i];
+
+        if (val != 0 && val > -1000000 && val < 1000000) { // Фильтр "разумных" чисел
+            if (current.empty())
+                startOffset = i;
+            current.push_back(val);
+        } else {
+            if ((int)current.size() >= MIN_ARRAY) {
+                std::cout << "int_array@" << (const void*)(baseAddr + startOffset) << " = { ";
+                for (size_t j = 0; j < current.size(); ++j) {
+                    std::cout << current[j];
+                    if (j + 1 < current.size())
+                        std::cout << ", ";
+                }
+                std::cout << " }\n";
+            }
+            current.clear();
+        }
+    }
+}
+
+// Находим PID процесса по имени
+DWORD GetProcessIdByName(const wchar_t* processName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) {
+                CloseHandle(snapshot);
+                return pe.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+
+    CloseHandle(snapshot);
+    return 0;
+}
+
+int main() {
+    DWORD pid = GetProcessIdByName(L"Target.exe");
+
+    HANDLE hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!hProcess) {
+        std::cerr << "Error open process\n";
+        return 1;
+    }
+
+    auto tids = GetProcessThread(pid);
+    if (tids.empty()) {
+        std::cerr << "Thread not found\n";
+        return 1;
+    }
+
+    for (DWORD tid : tids) {
+        HANDLE hThread = OpenThread(THREAD_QUERY_INFORMATION, FALSE, tid);
+        if (!hThread) continue;
+
+        ThreadStackInfo stackInfo{};
+        if (GetThreadStackInfo(hProcess, hThread, stackInfo)) {
+            SIZE_T stackSize = (BYTE*)stackInfo.stackBase - (BYTE*)stackInfo.stackLimit;
+            std::vector<BYTE> buffer(stackSize);
+
+            SIZE_T bytesRead = 0;
+            if (ReadProcessMemory(hProcess, stackInfo.stackLimit, buffer.data(), stackSize, &bytesRead)) {
+                std::cout << "\n[Thread] " << tid << "] Stack dump (" << bytesRead << " bytes):\n";
+
+                // Ищем массивы
+                ScanIntArray(buffer.data(), bytesRead, (BYTE*)stackInfo.stackLimit);
+
+                // Ищем строки
+                ScanASCIIStrings(buffer.data(), bytesRead, (BYTE*)stackInfo.stackLimit);
+            }
+        }
+        CloseHandle(hThread);
+    }
+
+    CloseHandle(hProcess);
+    return 0;
+}
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+Регистры потока
+
+То, что у нас сейчас написано это "глухое" чтение стека. Мы просто берём диапазон [StackLimit ... StackBase] и проходим его линейно, выдёргивая похожие на строки и массивы int. Это работает, но есть нюанс:
+- В этом диапазоне есть куча мусора: старые переменные, которые уже вышли из области видимости, инициализированный, но не используемый стек, временные данные.
+- Мы не знаем где именно сейчас исполняется поток и какие переменные у него актуальны.
+
+Контекст потока
+У каждого потока есть контекст - набор регистров процессора. В Windows его можно получить через API:
+CONTEXT ctx;
+ctx.ContextFlasgs = CONTEXT_FULL;
+GetThreadContext(hThread, &ctx);
+
+Что это даёт:
+- RSP/ESP (Stack Pointer) -> указывает на вершину стека, т.е. на актуальный адрес, с которого поток сейчас берёт/кладёт данные. 
+- RBP/EBP (Base Pointer) -> указывает на "рамку" текущей функции (frame). Обычно через него адресуются локальные переменные.
+- RIP/EIP (Instruction Pointer) -> адрес инструкции, которую выполняет поток. Это помогает понять, в какой функции он сейчас находится.
+
+Т.о. контекст потока - это "живое состояние", а стек как массив байтов - просто "фотография памяти".
+
+Как это применить
+- Получаем RSP -> это значит что искать переменные разумно начиная с этого RSP вверх к StackBase. используется как нижняя  граница активной части стека.
+- Получаем RBP -> это рамка функции, под ней могут быть локальные переменные. Полезен как ориентир, если фреймы не оптимизированы (компилятор не убрал frame-pointer), то можно пройти цепочку фреймов по сохранённым RBP и узнать
+	расположение локальных переменных.
+- Получаем RIP -> можно узнать какой код сейчас работает и соотнести стек с конкретной функцией. Можно потом сопоставить с .text и искать конкретные переменные, известные для этой функции.
+
+
+Код программы Target, с учётом контекста потока:
+#include <iostream>
+#include <windows.h>
+#include <tlhelp32.h>
+#include <psapi.h>
+#include <string>
+#include <vector>
+#include <cctype>
+
+const SIZE_T MAX_STACK_READ = 8 * 1024 * 1024;  // Макс читаем 8 мб
+const int MIN_STR_LEN = 4;
+const int MIN_INT_ARRAY = 3;
+
+// -----------------------
+// Определение NT-структур (Минимальные части)
+// -----------------------
+typedef LONG NTSTATUS;
+
+typedef enum _THREADINFOCLASS {
+    ThreadBasicInformation = 0
+} THREADINFOCLASS;
+
+typedef struct _CLIENT_ID {
+    PVOID UniqueProcess;
+    PVOID UniqueThread;
+} CLIENT_ID;
+
+typedef struct _THREAD_BASIC_INFORMATION {
+    NTSTATUS ExitStatus;
+    PVOID TebBaseAddress;
+    CLIENT_ID ClientId;
+    KAFFINITY AffinityMask;
+    LONG Priority;
+    LONG BasePriority;
+} THREAD_BASIC_INFORMATION;
+
+// NtQueryInformationThread
+typedef NTSTATUS(WINAPI* pNtQueryInformationThread)(
+    HANDLE, THREADINFOCLASS, PVOID, ULONG, PULONG
+);
+
+// Структура для информации о стеке
+struct ThreadStackInfo {
+    DWORD tid;
+    PVOID stackBase;
+    PVOID stackLimit;
+};
+
+// -----------------------
+// Получаем все потоки
+// -----------------------
+std::vector<DWORD> GetProcessThread(DWORD pid) {
+    std::vector<DWORD> tids;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (hSnap == INVALID_HANDLE_VALUE)
+        return tids;
+
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    if (Thread32First(hSnap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid)
+                tids.push_back(te.th32ThreadID);
+
+        } while (Thread32Next(hSnap, &te));
+    }
+    CloseHandle(hSnap);
+    return tids;
+}
+
+bool ReadRemoteTib(HANDLE hProcess, PVOID tebAddr, NT_TIB &outTib) {
+    SIZE_T r = 0;
+    return ReadProcessMemory(hProcess, tebAddr, &outTib, sizeof(outTib), &r) && r == sizeof(outTib);
+}
+
+// -----------------------
+// Поиск ASCII строк
+// -----------------------
+void ScanASCIIStrings(const unsigned char* data, SIZE_T size, uintptr_t baseAddr) {
+    std::string current;
+    for (SIZE_T i = 0; i < size; ++i) {
+        unsigned char c = (char)data[i];
+        if (isprint((unsigned char)c))
+            current.push_back((char)c);
+        else {
+            if ((int)current.size() >= MIN_STR_LEN) {
+                uintptr_t abs = baseAddr + i - current.size();
+                std::cout << "[string ASCII] 0x" << std::hex << abs << std::dec
+                    << " =\"" << current << "\"\n";
+            }
+            current.clear();
+        }
+    }
+    // tail
+    if ((int)current.size() >= MIN_STR_LEN) {
+        // Если буфер закончился без нуля - не печатаем, т.к. возможно неполная строка
+    }
+}
+
+// -----------------------
+// Поиск UTF-16 строк
+// -----------------------
+void ScanUtf16Strings(const unsigned char* data, SIZE_T size, uintptr_t baseAddr) {
+    // ищем UTF-16 (LE) — последовательности char16_t печатных символов, завершённые 0x0000
+    std::u16string cur;
+    for (SIZE_T i = 0; i + 1 < size; i += 2) {
+        char16_t c = *(const char16_t*)(data + i);
+        if (c >= 32 && c < 0xD800 && c < 0x007F) { // простой printable ASCII-range check
+            cur.push_back(c);
+        } else {
+            if ((int)cur.size() >= MIN_STR_LEN) {
+                uintptr_t abs = baseAddr + i - cur.size() * 2;
+                // конвертируем в utf8 для вывода
+                std::string out;
+                out.reserve(cur.size());
+                for (char16_t ch : cur) {
+                    if (ch < 0x80) out.push_back((char)ch);
+                    else {
+                        // простая UTF-8 конвертация для BMP (не полный поддерживаемый)
+                        if (ch < 0x800) {
+                            out.push_back((char)(0xC0 | (ch >> 6)));
+                            out.push_back((char)(0x80 | (ch & 0x3F)));
+                        } else {
+                            out.push_back((char)(0xE0 | (ch >> 12)));
+                            out.push_back((char)(0x80 | ((ch >> 6) & 0x3F)));
+                            out.push_back((char)(0x80 | (ch & 0x3F)));
+                        }
+                    }
+                }
+                std::cout << "[stack-utf16] 0x" << std::hex << abs << std::dec << " = \"" << out << "\"\n";
+            }
+            cur.clear();
+        }
+    }
+}
+
+// -----------------------
+// Поиск массивов int
+// -----------------------
+void ScanIntArray(const unsigned char* data, SIZE_T size, uintptr_t baseAddr) {
+    // Проходим по 4-байтовым словам и собираем подряд идущие "разумные" int
+    std::vector<int> current;
+    for (SIZE_T i = 0; i + sizeof(int) <= size; i += sizeof(int)) {
+        SIZE_T pos = i;
+        while (pos + sizeof(int) <= size) {
+            int v;
+            memcpy(&v, data + pos, sizeof(int));
+            if (v == 0 || v < -1000000 || v > 1000000) break;
+            current.push_back(v);
+            pos += sizeof(int);
+        }
+        if (current.size() >= (size_t)MIN_INT_ARRAY) {
+            uintptr_t abs = baseAddr + i;
+            std::cout << "[stack-int-array] 0x" << std::hex << abs << std::dec << " = { ";
+            for (size_t j = 0; j < current.size(); ++j)
+                std::cout << current[j] << (j + 1 < current.size() ? ", " : " ");
+            std::cout << "}\n";
+            i = pos - sizeof(int); // Перескакиваем пройдённую область
+        }
+        current.clear();
+    }
+}
+
+// Находим PID процесса по имени
+DWORD GetProcessIdByName(const wchar_t* processName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) {
+                CloseHandle(snapshot);
+                return pe.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+
+    CloseHandle(snapshot);
+    return 0;
+}
+
+int main() {
+    DWORD pid = GetProcessIdByName(L"Target.exe");
+
+    HANDLE hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!hProcess) {
+        std::cerr << "Error open process\n";
+        return 1;
+    }
+
+    // NtQueryInformationThread
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (!ntdll) {
+        std::cerr << "GetModuleHandle ntdll failed\n";
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    auto NtQueryInformationThread = (pNtQueryInformationThread) GetProcAddress(ntdll, "NtQueryInformationThread");
+    if (!NtQueryInformationThread) {
+        std::cerr << "NtQueryInformationThread not found\n";
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    auto tids = GetProcessThread(pid);
+    if (tids.empty()) {
+        std::cerr << "No threads found\n";
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    for (DWORD tid : tids) {
+        // Открываем поток с правами на приостановку и получения контекста
+        HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
+        if (!hThread) continue;
+
+        // 1) Приостанавливаем поток
+        if (SuspendThread(hThread) == (DWORD)-1) {
+            CloseHandle(hThread);
+            continue;
+        }
+
+        // 2) Получаем TEB адрес через NtQueryInformationThread
+        THREAD_BASIC_INFORMATION tbi{};
+        ULONG len = 0;
+        if (NtQueryInformationThread(hThread, ThreadBasicInformation, &tbi, sizeof(tbi), &len) != 0) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+
+        // 3) Читаем NT_TIB (в TEB) чтобы узнать StackBase / StackLimit
+        NT_TIB tib{};
+        if (!ReadRemoteTib(hProcess, tbi.TebBaseAddress, tib)) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+
+        uintptr_t stackBase = (uintptr_t)tib.StackBase;
+        uintptr_t stackLimit = (uintptr_t)tib.StackLimit;
+
+        // 4) Получаем контекст (RSP/RBP и RIP)
+        CONTEXT ctx;
+        ZeroMemory(&ctx, sizeof(ctx));
+#ifdef _WIN64
+        ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+#else
+        ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+#endif // _WIN64
+        uintptr_t sp = stackLimit; // fallback
+        uintptr_t bp = 0;
+        uintptr_t ip = 0;
+        if (GetThreadContext(hThread, &ctx)) {
+#ifdef _WIN64
+            sp = (uintptr_t) ctx.Rsp;
+            bp = (uintptr_t) ctx.Rbp;
+            ip = (uintptr_t) ctx.Rip;
+#else
+            sp = (uintptr_t) ctx.Esp;
+            bp = (uintptr_t) ctx.Ebp;
+            ip = (uintptr_t) ctx.Eip;
+#endif // _WIN64
+        }
+
+        // 5) Нормализуем и сужаем область чтения до [sp ... stackBase]
+        if (sp < stackLimit) sp = stackLimit;
+        if (sp > stackBase) sp = stackLimit; // некорректный SP -> читаем весь стек сверху вниз
+
+        SIZE_T toRead = 0;
+        if (stackBase > sp) toRead = stackBase - sp;
+        if (toRead == 0) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+        if (toRead > MAX_STACK_READ) {
+            // Читаем только верхнюю часть стека, т.к. полный слишком большой
+            sp = stackBase - MAX_STACK_READ;
+            toRead = MAX_STACK_READ;
+        }
+
+        std::vector<unsigned char> buffer;
+        buffer.resize(toRead);
+        SIZE_T actuallyRead = 0;
+        if (!ReadProcessMemory(hProcess, (LPCVOID)sp, buffer.data(), toRead, &actuallyRead) || actuallyRead == 0) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+        buffer.resize(actuallyRead);
+
+        std::cout << "\n[Thread " << tid << "] active stack: 0x" << std::hex << sp
+                  << " .. 0x" << stackBase << " (SP=0x" << sp << ", BP=0x" << bp << ", IP=0x" << ip << ")"
+                  << " read=" << std::dec << actuallyRead << " bytes\n";
+
+        // 6) Запускаем сканеры на активной части
+        ScanASCIIStrings(buffer.data(), buffer.size(), sp);
+        ScanUtf16Strings(buffer.data(), buffer.size(), sp);
+        ScanIntArray(buffer.data(), buffer.size(), sp);
+
+        // 7) Возобновляем поток и закрываем handle
+        ResumeThread(hThread);
+        CloseHandle(hThread);
+    }
+
+    CloseHandle(hProcess);
+    return 0;
+}
+
+
+Мы добавили приостановку потока (SuspendThread) перед чтением контекста/TEB/стека. Это даёт консистентный снимок: пока поток приостановлен, RSP/RBP/RIP и стек не меняются (по крайней мере в рамках нашей операции).  Однако 
+приостановка потоков может привести к зависанию процесса, поэтому нужно делать паузы минимальными и иметь таймауты. В конце обязательно нужно возобновить поток ResumeThread. Реализовали получение контекста потока 
+GetThreadContext и чтение SP/BP/IP. Чтение только активной части [SP ... StackBase] вместо всего [StackLimit ... StackBase] позволяет значительно уменьшить объём читаемых данных и шум, повышает вероятность найти актуальные локальные 
+переменные.
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+Указатели на heap и .rdata
+
+На стеке могут лежать указатели, которые могут указывать на другие области памяти. Для чтения данных таких указателей нужно модернизировать наш Reader. Для этого добавим поддержку "follow-pointers" со стека в области .rdata (модули,
+MEM\_IMAGE) и в heap (MEM\_PRIVATE). Также нужно проверять указатели на валидность через VirtualQueryEx. Мы будем читать активную часть стека [SP ... StackBase] и извлекать кандидаты-указатели (по размеру машинного слова). Для каждого
+указателя проверять можно ли читать по нему, проверять куда попадает указатель.
+
+Код программы Target, которая генерирует кданные в .rdata, heap и кладёт указатели на стек.
+#include <iostream>
+#include <thread>
+#include <cstring>
+
+void worker() {
+    // 1) Литерал -> лежит на .rdata
+    const char* rdata_str = "RDATA literal sample 12345";
+    // 2) Heap-строки
+    char* heap_str1 = _strdup("Hello from HEAP (ascii)!");
+    wchar_t* heap_wstr = _wcsdup(L"Hello from HEAP (utf16)!");
+    // 3) Heap-массив int
+    int* heap_arr = (int*)malloc(sizeof(int) * 8);
+    for (int i = 0; i < 8; ++i)
+        heap_arr[i] = (i + 1) * 10;
+
+    // 4) Локальные указатели на стек (reader их найдёт как pointer-candidates)
+    const char* p1 = rdata_str; // -> .rdata
+    char*       p2 = heap_str1; // -> heap ascii
+    wchar_t*    p3 = heap_wstr; // -> heap utf16
+    int*        p4 = heap_arr;  // -> heap int array
+
+    
+    // 5) Локальные массивы и строки
+    bool exit = true;
+    int number[5] = {10, 20, 30, 40, 50};
+    char message[64];
+    strcpy(message, "Hellow from worker target stack!");
+
+    std::cout << "Worker thread running.\n";
+
+
+    while(exit) {						// Программа продолжает работать пока мы её не выключим
+        std::cout << "Power off? 0-Yes, 1-no/n ";
+        std::cin >> exit;
+        if(exit < 0 || exit > 1) {
+            std::cout << "Incorrect input, terminate the programm.";
+            std::terminate();
+        }
+    }
+
+    free(heap_str1);
+    free(heap_wstr);
+    free(heap_arr);
+}
+
+int main() {
+    int arr[5] = {5, 5, 5, 5, 5};
+    char message[64];
+    strcpy(message, "Hellow from main target stack!");
+
+    std::thread t(worker);
+    t.join();
+    return 0;
+}
+
+
+
+Код программы Reader, который может находить массивы int, ASCII и UTF-16 строки на стеке, а также ищет указатели на стеке на другие области памяти. Идём по стеку с шагом sizeof(void*) и собираем кандидатов указателей, затем отсекаем
+нули и явно мусорные адреса. Валедируем указатель и классифицируем регион памяти, на который указывает указатель, затем считываем данные.
+#include <windows.h>
+#include <tlhelp32.h>
+#include <iostream>
+#include <vector>
+#include <string>
+#include <unordered_set>
+#include <cctype>
+#include <cstdint>
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <psapi.h>
+
+
+// -----------------------
+// Определение NT-структур (Минимальные части)
+// -----------------------
+typedef LONG NTSTATUS;
+
+typedef enum _THREADINFOCLASS {
+    ThreadBasicInformation = 0
+} THREADINFOCLASS;
+
+typedef struct _CLIENT_ID {
+    PVOID UniqueProcess;
+    PVOID UniqueThread;
+} CLIENT_ID;
+
+typedef struct _THREAD_BASIC_INFORMATION {
+    NTSTATUS ExitStatus;
+    PVOID TebBaseAddress;
+    CLIENT_ID ClientId;
+    KAFFINITY AffinityMask;
+    LONG Priority;
+    LONG BasePriority;
+} THREAD_BASIC_INFORMATION;
+
+// NtQueryInformationThread
+typedef NTSTATUS(WINAPI* pNtQueryInformationThread)(
+    HANDLE, THREADINFOCLASS, PVOID, ULONG, PULONG
+);
+
+
+// ----------------------- PE заголовки --------------------------
+#pragma pack(push, 1)
+typedef struct _IMAGE_DOS_HEADER_MIN {
+    WORD e_magic;      // 'MZ'
+    WORD e_cblp; WORD e_cp; WORD e_crlc; WORD e_cparhdr; WORD e_minalloc;
+    WORD e_maxalloc; WORD e_ss; WORD e_sp; WORD e_csum; WORD e_ip; WORD e_cs;
+    WORD e_lfarlc; WORD e_ovno; WORD e_res[4]; WORD e_oemid; WORD e_oeminfo; WORD e_res2[10];
+    LONG e_lfanew;     // offset to NT headers
+} IMAGE_DOS_HEADER_MIN;
+
+typedef struct _IMAGE_FILE_HEADER_MIN {
+    WORD  Machine;
+    WORD  NumberOfSections;
+    DWORD TimeDateStamp;
+    DWORD PointerToSymbolTable;
+    DWORD NumberOfSymbols;
+    WORD  SizeOfOptionalHeader;
+    WORD  Characteristics;
+} IMAGE_FILE_HEADER_MIN;
+
+typedef struct _IMAGE_DATA_DIRECTORY_MIN {
+    DWORD VirtualAddress;
+    DWORD Size;
+} IMAGE_DATA_DIRECTORY_MIN;
+
+typedef struct _IMAGE_OPTIONAL_HEADER64_MIN {
+    WORD  Magic;
+    BYTE  MajorLinkerVersion, MinorLinkerVersion;
+    DWORD SizeOfCode, SizeOfInitializedData, SizeOfUninitializedData;
+    DWORD AddressOfEntryPoint, BaseOfCode;
+    ULONGLONG ImageBase;
+    DWORD SectionAlignment, FileAlignment;
+    WORD  MajorOSVersion, MinorOSVersion, MajorImageVersion, MinorImageVersion;
+    WORD  MajorSubsystemVersion, MinorSubsystemVersion;
+    DWORD Win32VersionValue, SizeOfImage, SizeOfHeaders;
+    DWORD CheckSum; WORD Subsystem, DllCharacteristics;
+    ULONGLONG SizeOfStackReserve, SizeOfStackCommit, SizeOfHeapReserve, SizeOfHeapCommit;
+    DWORD LoaderFlags, NumberOfRvaAndSizes;
+    IMAGE_DATA_DIRECTORY_MIN DataDirectory[16];
+} IMAGE_OPTIONAL_HEADER64_MIN;
+
+typedef struct _IMAGE_OPTIONAL_HEADER32_MIN {
+    WORD  Magic;
+    BYTE  MajorLinkerVersion, MinorLinkerVersion;
+    DWORD SizeOfCode, SizeOfInitializedData, SizeOfUninitializedData;
+    DWORD AddressOfEntryPoint, BaseOfCode, BaseOfData;
+    DWORD ImageBase;
+    DWORD SectionAlignment, FileAlignment;
+    WORD  MajorOSVersion, MinorOSVersion, MajorImageVersion, MinorImageVersion;
+    WORD  MajorSubsystemVersion, MinorSubsystemVersion;
+    DWORD Win32VersionValue, SizeOfImage, SizeOfHeaders;
+    DWORD CheckSum; WORD Subsystem, DllCharacteristics;
+    DWORD SizeOfStackReserve, SizeOfStackCommit, SizeOfHeapReserve, SizeOfHeapCommit;
+    DWORD LoaderFlags, NumberOfRvaAndSizes;
+    IMAGE_DATA_DIRECTORY_MIN DataDirectory[16];
+} IMAGE_OPTIONAL_HEADER32_MIN;
+
+typedef struct _IMAGE_NT_HEADERS64_MIN {
+    DWORD Signature; // 'PE\0\0'
+    IMAGE_FILE_HEADER_MIN FileHeader;
+    IMAGE_OPTIONAL_HEADER64_MIN OptionalHeader;
+} IMAGE_NT_HEADERS64_MIN;
+
+typedef struct _IMAGE_NT_HEADERS32_MIN {
+    DWORD Signature;
+    IMAGE_FILE_HEADER_MIN FileHeader;
+    IMAGE_OPTIONAL_HEADER32_MIN OptionalHeader;
+} IMAGE_NT_HEADERS32_MIN;
+
+typedef struct _IMAGE_SECTION_HEADER_MIN {
+    BYTE  Name[8];
+    union { DWORD PhysicalAddress; DWORD VirtualSize; } Misc;
+    DWORD VirtualAddress;
+    DWORD SizeOfRawData;
+    DWORD PointerToRawData;
+    DWORD PointerToRelocations;
+    DWORD PointerToLinenumbers;
+    WORD  NumberOfRelocations;
+    WORD  NumberOfLinenumbers;
+    DWORD Characteristics;
+} IMAGE_SECTION_HEADER_MIN;
+#pragma pack(pop)
+
+
+// ----------------------- Настройки эвристик --------------------
+const SIZE_T MAX_STACK_READ   = 8 * 1024 * 1024;
+const SIZE_T MAX_POINTER_FOLLOW = 4096;      // максимум читаем при follow (4 KB)
+const int MIN_STR_LEN = 4;
+const int MIN_INT_ARRAY = 3;
+
+
+
+// ----------------------- Утилиты -------------------------------
+// -----------------------
+// Получаем все потоки
+// -----------------------
+std::vector<DWORD> GetProcessThread(DWORD pid) {
+    std::vector<DWORD> tids;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (hSnap == INVALID_HANDLE_VALUE)
+        return tids;
+
+    THREADENTRY32 te;
+    te.dwSize = sizeof(te);
+    if (Thread32First(hSnap, &te)) {
+        do {
+            if (te.th32OwnerProcessID == pid)
+                tids.push_back(te.th32ThreadID);
+
+        } while (Thread32Next(hSnap, &te));
+    }
+    CloseHandle(hSnap);
+    return tids;
+}
+
+bool ReadRemoteTib(HANDLE hProcess, PVOID tebAddr, NT_TIB &outTib) {
+    SIZE_T r = 0;
+    return ReadProcessMemory(hProcess, tebAddr, &outTib, sizeof(outTib), &r) && r == sizeof(outTib);
+}
+
+// Находим PID процесса по имени
+DWORD GetProcessIdByName(const wchar_t* processName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return 1;
+
+    PROCESSENTRY32W pe;
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snapshot, &pe)) {
+        do {
+            if (_wcsicmp(pe.szExeFile, processName) == 0) {
+                CloseHandle(snapshot);
+                return pe.th32ProcessID;
+            }
+        } while (Process32NextW(snapshot, &pe));
+    }
+
+    CloseHandle(snapshot);
+    return 0;
+}
+
+// Получить список модулей процесса
+std::vector<MODULEENTRY32W> EnumModules(DWORD pid) {
+    std::vector<MODULEENTRY32W> mods;
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    if (hSnap == INVALID_HANDLE_VALUE) return mods;
+    MODULEENTRY32W me; me.dwSize = sizeof(me);
+    if (Module32FirstW(hSnap, &me)) {
+        do { mods.push_back(me); } while (Module32NextW(hSnap, &me));
+    }
+    CloseHandle(hSnap);
+    return mods;
+}
+const MODULEENTRY32W* FindModuleByAddress(const std::vector<MODULEENTRY32W>& mods, uintptr_t addr) {
+    for (const auto& m : mods) {
+        uintptr_t base = (uintptr_t)m.modBaseAddr;
+        uintptr_t end  = base + m.modBaseSize;
+        if (addr >= base && addr < end)
+            return &m;
+    }
+    return nullptr;
+}
+
+// Проверяем, попадает ли адрес в секцию ".rdata" данного модуля
+bool AddressInRdata(HANDLE hProcess, const MODULEENTRY32W& mod, uintptr_t addr) {
+    uintptr_t base = (uintptr_t)mod.modBaseAddr;
+    // читаем DOS header
+    IMAGE_DOS_HEADER_MIN dos{};
+    SIZE_T r = 0;
+    if (!ReadProcessMemory(hProcess, (LPCVOID)base, &dos, sizeof(dos), &r) || r != sizeof(dos))
+        return false;
+    if (dos.e_magic != 0x5A4D) return false; // 'MZ'
+
+    DWORD nt_off = (DWORD)dos.e_lfanew;
+    DWORD sig = 0;
+    if (!ReadProcessMemory(hProcess, (LPCVOID)(base + nt_off), &sig, sizeof(sig), &r) || r != sizeof(sig))
+        return false;
+    if (sig != 0x00004550) return false; // 'PE\0\0'
+
+    // читаем FileHeader
+    IMAGE_FILE_HEADER_MIN fh{};
+    if (!ReadProcessMemory(hProcess,
+                           (LPCVOID)(base + nt_off + sizeof(DWORD)),
+                           &fh, sizeof(fh), &r)
+            || r != sizeof(fh)) {
+        return false;
+    }
+
+
+    // читаем OptionalHeader по разрядности
+    //bool is64 = false;
+    WORD magic = 0;
+    if (!ReadProcessMemory(hProcess, (LPCVOID)(base + nt_off + sizeof(DWORD) + sizeof(fh))
+                           , &magic, sizeof(magic), &r) || r != sizeof(magic)) {
+        return false;
+    }
+    //is64 = (magic == 0x20B); // PE32+ = 0x20B
+
+    DWORD optSize = fh.SizeOfOptionalHeader;
+    DWORD sectTableOff = nt_off + sizeof(DWORD) + sizeof(fh) + optSize;
+
+    // читаем секции
+    for (int i = 0; i < fh.NumberOfSections; ++i) {
+        IMAGE_SECTION_HEADER_MIN sh{};
+        if (!ReadProcessMemory(hProcess,
+                               (LPCVOID)(base + sectTableOff + i * sizeof(sh)),
+                               &sh, sizeof(sh), &r)
+                || r != sizeof(sh)) {
+            return false;
+        }
+        // имя секции (не нуль-терминрованное)
+        char name[9]; memcpy(name, sh.Name, 8); name[8] = 0;
+        DWORD vsize = std::max(sh.Misc.VirtualSize, sh.SizeOfRawData);
+        uintptr_t secStart = base + sh.VirtualAddress;
+        uintptr_t secEnd   = secStart + vsize;
+        if (_stricmp(name, ".rdata") == 0) {
+            if (addr >= secStart && addr < secEnd) return true;
+        }
+    }
+    return false;
+}
+
+bool IsReadableProtect(DWORD protect) {
+    if (protect & PAGE_GUARD) return false;
+    if (protect == PAGE_NOACCESS) return false;
+    DWORD p = protect & 0xFF;
+    return (p == PAGE_READONLY || p == PAGE_READWRITE || p == PAGE_WRITECOPY ||
+            p == PAGE_EXECUTE_READ || p == PAGE_EXECUTE_READWRITE || p == PAGE_EXECUTE_WRITECOPY);
+}
+
+// Проверка адреса через VirtualQueryEx; возвращает, можно ли читать + info
+bool QueryReadable(HANDLE hProcess, uintptr_t addr, MEMORY_BASIC_INFORMATION& mbiOut) {
+    SIZE_T n = VirtualQueryEx(hProcess, (LPCVOID)addr, &mbiOut, sizeof(mbiOut));
+    if (n != sizeof(mbiOut)) return false;
+    if (mbiOut.State != MEM_COMMIT) return false;
+    if (!IsReadableProtect(mbiOut.Protect)) return false;
+    return true;
+}
+
+
+
+// ---------- локальные сканеры строк и массивов ----------
+bool ReadAsciiFrom(HANDLE hProcess, uintptr_t addr, std::string& out, SIZE_T maxBytes = MAX_POINTER_FOLLOW) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!QueryReadable(hProcess, addr, mbi)) return false;
+    SIZE_T offset = addr - (uintptr_t)mbi.BaseAddress;
+    SIZE_T canRead = std::min(mbi.RegionSize - offset, maxBytes);
+    std::vector<char> buf(canRead);
+    SIZE_T rd = 0;
+    if (!ReadProcessMemory(hProcess, (LPCVOID)addr, buf.data(), canRead, &rd) || rd == 0) return false;
+
+    // ищем '\0' и печатность
+    SIZE_T i = 0;
+    while (i < rd && buf[i] && (unsigned char)buf[i] >= 32 && (unsigned char)buf[i] <= 126) ++i;
+    if (i < rd && buf[i] == '\0' && i >= (SIZE_T)MIN_STR_LEN) {
+        out.assign(buf.data(), i);
+        return true;
+    }
+    return false;
+}
+
+bool ReadUtf16From(HANDLE hProcess, uintptr_t addr, std::string& outUtf8, SIZE_T maxBytes = MAX_POINTER_FOLLOW) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!QueryReadable(hProcess, addr, mbi)) return false;
+    SIZE_T offset = addr - (uintptr_t)mbi.BaseAddress;
+    SIZE_T canRead = std::min(mbi.RegionSize - offset, maxBytes);
+    if (canRead < 4) return false;
+    std::vector<unsigned char> buf(canRead);
+    SIZE_T rd = 0;
+    if (!ReadProcessMemory(hProcess, (LPCVOID)addr, buf.data(), canRead, &rd) || rd < 4) return false;
+
+    // читаем до нулевого wchar_t
+    size_t i = 0, chars = 0;
+    while (i + 1 < rd) {
+        char16_t c = *(const char16_t*)(buf.data() + i);
+        if (c == 0) break;
+        // допустим только печатные ASCII для простоты (можно расширить)
+        if (c < 32 || c > 126) return false;
+        i += 2; ++chars;
+        if (i >= rd) break;
+    }
+    if (i + 1 >= rd) return false; // нет нулевого терминатора в выделенном куске
+    if ((int)chars < MIN_STR_LEN) return false;
+
+    // простая UTF-16LE -> UTF-8
+    outUtf8.clear();
+    outUtf8.reserve(chars);
+    for (size_t k = 0; k < i; k += 2) {
+        char16_t c = *(const char16_t*)(buf.data() + k);
+        if (c < 0x80) outUtf8.push_back((char)c);
+        else if (c < 0x800) {
+            outUtf8.push_back((char)(0xC0 | (c >> 6)));
+            outUtf8.push_back((char)(0x80 | (c & 0x3F)));
+        } else {
+            outUtf8.push_back((char)(0xE0 | (c >> 12)));
+            outUtf8.push_back((char)(0x80 | ((c >> 6) & 0x3F)));
+            outUtf8.push_back((char)(0x80 | (c & 0x3F)));
+        }
+    }
+    return true;
+}
+
+bool ReadIntArrayFrom(HANDLE hProcess, uintptr_t addr, std::vector<int>& out, size_t maxCount = 64) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!QueryReadable(hProcess, addr, mbi)) return false;
+    SIZE_T offset = addr - (uintptr_t)mbi.BaseAddress;
+    SIZE_T canRead = std::min(mbi.RegionSize - offset, (SIZE_T)(maxCount * sizeof(int)));
+    if (canRead < sizeof(int) * MIN_INT_ARRAY) return false;
+
+    std::vector<int> buf(canRead / sizeof(int));
+    SIZE_T rd = 0;
+    if (!ReadProcessMemory(hProcess, (LPCVOID)addr, buf.data(), canRead, &rd) || rd < sizeof(int) * MIN_INT_ARRAY) return false;
+    size_t n = rd / sizeof(int);
+
+    out.clear();
+    for (size_t i = 0; i < n; ++i) {
+        int v = buf[i];
+        if (v == 0 || v < -1000000 || v > 1000000) break; // простая эвристика
+        out.push_back(v);
+    }
+    return out.size() >= (size_t)MIN_INT_ARRAY;
+}
+
+
+
+// ----------------- Сканеры по стэку (как раньше) ----------------
+// -----------------------
+// Поиск ASCII строк
+// -----------------------
+void ScanASCIIStrings(const unsigned char* data, SIZE_T size, uintptr_t baseAddr) {
+    std::string current;
+    for (SIZE_T i = 0; i < size; ++i) {
+        unsigned char c = (char)data[i];
+        if (isprint((unsigned char)c))
+            current.push_back((char)c);
+        else {
+            if ((int)current.size() >= MIN_STR_LEN) {
+                uintptr_t abs = baseAddr + i - current.size();
+                std::cout << "[stack string ASCII] 0x" << std::hex << abs << std::dec
+                    << " = \"" << current << "\"\n";
+            }
+            current.clear();
+        }
+    }
+    // tail
+    if ((int)current.size() >= MIN_STR_LEN) {
+        // Если буфер закончился без нуля - не печатаем, т.к. возможно неполная строка
+    }
+}
+
+// -----------------------
+// Поиск UTF-16 строк
+// -----------------------
+void ScanUtf16Strings(const unsigned char* data, SIZE_T size, uintptr_t baseAddr) {
+    // ищем UTF-16 (LE) — последовательности char16_t печатных символов, завершённые 0x0000
+    std::u16string cur;
+    for (SIZE_T i = 0; i + 1 < size; i += 2) {
+        char16_t c = *(const char16_t*)(data + i);
+        if (c >= 32 && c < 0xD800 && c < 0x007F) { // простой printable ASCII-range check
+            cur.push_back(c);
+        } else {
+            if ((int)cur.size() >= MIN_STR_LEN) {
+                uintptr_t abs = baseAddr + i - cur.size() * 2;
+                // конвертируем в utf8 для вывода
+                std::string out;
+                out.reserve(cur.size());
+                for (char16_t ch : cur) {
+                    if (ch < 0x80) out.push_back((char)ch);
+                    else {
+                        // простая UTF-8 конвертация для BMP (не полный поддерживаемый)
+                        if (ch < 0x800) {
+                            out.push_back((char)(0xC0 | (ch >> 6)));
+                            out.push_back((char)(0x80 | (ch & 0x3F)));
+                        } else {
+                            out.push_back((char)(0xE0 | (ch >> 12)));
+                            out.push_back((char)(0x80 | ((ch >> 6) & 0x3F)));
+                            out.push_back((char)(0x80 | (ch & 0x3F)));
+                        }
+                    }
+                }
+                std::cout << "[stack-utf16] 0x" << std::hex << abs << std::dec << " = \"" << out << "\"\n";
+            }
+            cur.clear();
+        }
+    }
+}
+
+// -----------------------
+// Поиск массивов int
+// -----------------------
+void ScanIntArray(const unsigned char* data, SIZE_T size, uintptr_t baseAddr) {
+    // Проходим по 4-байтовым словам и собираем подряд идущие "разумные" int
+    std::vector<int> current;
+    for (SIZE_T i = 0; i + sizeof(int) <= size; i += sizeof(int)) {
+        SIZE_T pos = i;
+        while (pos + sizeof(int) <= size) {
+            int v;
+            memcpy(&v, data + pos, sizeof(int));
+            if (v == 0 || v < -1000000 || v > 1000000) break;
+            current.push_back(v);
+            pos += sizeof(int);
+        }
+        if (current.size() >= (size_t)MIN_INT_ARRAY) {
+            uintptr_t abs = baseAddr + i;
+            std::cout << "[stack-int-array] 0x" << std::hex << abs << std::dec << " = { ";
+            for (size_t j = 0; j < current.size(); ++j)
+                std::cout << current[j] << (j + 1 < current.size() ? ", " : " ");
+            std::cout << "}\n";
+            i = pos - sizeof(int); // Перескакиваем пройдённую область
+        }
+        current.clear();
+    }
+}
+
+
+
+// --------------- Follow pointers со стека -----------------------
+void FollowPointersFromStack(
+    HANDLE hProcess,
+    DWORD pid,
+    const std::vector<MODULEENTRY32W>& modules,
+    uintptr_t stackBeginAddr,
+    const unsigned char* buf,
+    SIZE_T size
+) {
+    const SIZE_T step = sizeof(void*);
+    std::unordered_set<uintptr_t> seen;
+
+    for (SIZE_T off = 0; off + step <= size; off += step) {
+        uintptr_t candidate = 0;
+        memcpy(&candidate, buf + off, step);
+
+        // фильтр: адресы ниже 64KB обычно не валидны; игнорируем явные нули
+#ifdef _WIN64
+        if (candidate < 0x10000ull || candidate > 0x00007FFFFFFFFFFFull) continue;
+#else
+        if (candidate < 0x10000u) continue;
+#endif
+        // избегаем повторов
+        if (!seen.insert(candidate).second) continue;
+
+        // не интересуемся адресами, всё ещё попадающими в текущий стек (чтобы не "зациклиться")
+        // (грубая проверка — можно добавить точные границы стека потока)
+        // здесь stackBeginAddr..stackBeginAddr+size — область, что мы прочитали
+        if (candidate >= stackBeginAddr && candidate < stackBeginAddr + size) continue;
+
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!QueryReadable(hProcess, candidate, mbi)) continue;
+
+        std::string ascii;
+        std::string u16;
+        std::vector<int> ints;
+
+        bool isStringAscii = ReadAsciiFrom(hProcess, candidate, ascii);
+        bool isStringU16   = !isStringAscii && ReadUtf16From(hProcess, candidate, u16);
+        bool isIntArray    = ReadIntArrayFrom(hProcess, candidate, ints);
+
+        if (!(isStringAscii || isStringU16 || isIntArray)) continue;
+
+        // классифицируем регион
+        const wchar_t* regionKind = L"unknown";
+        const wchar_t* where      = L"other";
+        if (mbi.Type == MEM_IMAGE) {
+            const MODULEENTRY32W* mod = FindModuleByAddress(modules, candidate);
+            if (mod) {
+                bool inRdata = AddressInRdata(hProcess, *mod, candidate);
+                regionKind = inRdata ? L"rdata" : L"image";
+                where = mod->szModule;
+            } else {
+                regionKind = L"image";
+            }
+        } else if (mbi.Type == MEM_PRIVATE) {
+            regionKind = L"heap/private";
+        } else if (mbi.Type == MEM_MAPPED) {
+            regionKind = L"mapped";
+        }
+
+        // печать результата
+        std::wcout << L"[ptr@" << (void*)candidate << L"] region=" << regionKind
+                   << L" (" << where << L")  -> ";
+
+        if (isStringAscii) {
+            std::cout << "\""<< ascii << "\"";
+            if (wcscmp(regionKind, L"rdata") == 0) std::cout << "  [rdata-string]";
+            else if (wcscmp(regionKind, L"heap/private") == 0) std::cout << "  [heap-string]";
+            std::cout << "\n";
+        } else if (isStringU16) {
+            std::cout << "\"" << u16 << "\"";
+            if (wcscmp(regionKind, L"rdata") == 0) std::cout << "  [rdata-wstring]";
+            else if (wcscmp(regionKind, L"heap/private") == 0) std::cout << "  [heap-wstring]";
+            std::cout << "\n";
+        } else if (isIntArray) {
+            std::cout << "{ ";
+            for (size_t i = 0; i < ints.size(); ++i) {
+                std::cout << ints[i] << (i + 1 < ints.size() ? ", " : " ");
+            }
+            std::cout << "}";
+            if (wcscmp(regionKind, L"heap/private") == 0) std::cout << "  [heap-int-array]";
+            std::cout << "\n";
+        }
+    }
+}
+
+
+
+// ------------------------------ main ---------------------------
+int main() {
+    DWORD pid = GetProcessIdByName(L"Test.exe");
+
+    HANDLE hProcess = OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    if (!hProcess) {
+        std::cerr << "Error open process\n";
+        return 1;
+    }
+
+    // NtQueryInformationThread
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) {
+        std::cerr << "GetModuleHandle(ntdll) failed\n";
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    auto NtQueryInformationThread = (pNtQueryInformationThread) GetProcAddress(ntdll, "NtQueryInformationThread");
+    if (!NtQueryInformationThread) {
+        std::cerr << "NtQueryInformationThread not found\n";
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    // Загружаем список модулей для классификации MEM_IMAGE / .rdata
+    auto modules = EnumModules(pid);
+
+    // Перечисляем потоки
+    auto tids = GetProcessThread(pid);
+    if (tids.empty()) {
+        std::cerr << "Threads not found\n";
+        CloseHandle(hProcess);
+        return 1;
+    }
+
+    for (DWORD tid : tids) {
+        // Открываем поток с правами на приостановку и получения контекста
+        HANDLE hThread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
+        if (!hThread) continue;
+
+        // 1) Приостанавливаем поток
+        if (SuspendThread(hThread) == (DWORD)-1) {
+            CloseHandle(hThread);
+            continue;
+        }
+
+        // 2) Получаем TEB адрес через NtQueryInformationThread. Получаем TEB -> NT_TIB -> границы стека
+        THREAD_BASIC_INFORMATION tbi{};
+        ULONG ret = 0;
+        NTSTATUS st = NtQueryInformationThread(hThread, ThreadBasicInformation, &tbi, sizeof(tbi), &ret);
+        if (st != 0) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+
+        // 3) Читаем NT_TIB (в TEB) чтобы узнать StackBase / StackLimit
+        NT_TIB tib{};
+        if (!ReadRemoteTib(hProcess, tbi.TebBaseAddress, tib)) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+
+        uintptr_t stackBase  = (uintptr_t)tib.StackBase;
+        uintptr_t stackLimit = (uintptr_t)tib.StackLimit;
+
+        // // 4) Получаем контекст (RSP/RBP и RIP)
+        CONTEXT ctx;
+        ZeroMemory(&ctx, sizeof(ctx));
+        ctx.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+        uintptr_t sp = stackLimit;
+        uintptr_t bp = 0, ip = 0;
+        if (GetThreadContext(hThread, &ctx)) {
+        #ifdef _WIN64
+            sp = (uintptr_t)ctx.Rsp; bp = (uintptr_t)ctx.Rbp; ip = (uintptr_t)ctx.Rip;
+        #else
+            sp = (uintptr_t)ctx.Esp; bp = (uintptr_t)ctx.Ebp; ip = (uintptr_t)ctx.Eip;
+        #endif
+        }
+
+        // 5) Нормализуем и сужаем область чтения до [sp ... stackBase]
+        if (sp < stackLimit) sp = stackLimit;
+        if (sp > stackBase)  sp = stackLimit; // некорректный SP -> читаем весь стек сверху вниз
+
+        SIZE_T toRead = (stackBase > sp) ? (stackBase - sp) : 0;
+        if (toRead == 0) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+        if (toRead > MAX_STACK_READ) {
+            // Читаем только верхнюю часть стека, т.к. полный слишком большой
+            sp = stackBase - MAX_STACK_READ;
+            toRead = MAX_STACK_READ;
+        }
+
+        std::vector<unsigned char> buf(toRead);
+        SIZE_T actuallyRead  = 0;
+        if (!ReadProcessMemory(hProcess, (LPCVOID)sp, buf.data(), toRead, &actuallyRead ) || actuallyRead  == 0) {
+            ResumeThread(hThread);
+            CloseHandle(hThread);
+            continue;
+        }
+        buf.resize(actuallyRead );
+
+        std::cout << "\n[Thread " << tid << "] active stack: 0x" << std::hex << sp
+                  << " .. 0x" << stackBase << " (SP=" << sp << ", BP=" << bp << ", IP=" << ip << ")  "
+                  << "read=" << std::dec << actuallyRead  << " bytes\n";
+
+        // 6) Запускаем сканеры на активной части
+        // a) по старинке: строки/массивы прямо из стека
+        ScanIntArray(buf.data(), buf.size(), sp);
+        ScanASCIIStrings(buf.data(), buf.size(), sp);
+        ScanUtf16Strings(buf.data(), buf.size(), sp);
+
+        // b) follow-pointers: пытаемся по указателям найти настоящие строки/массивы вне стека
+        FollowPointersFromStack(hProcess, pid, modules, sp, buf.data(), buf.size());
+
+        // 7) Возобновляем поток и закрываем handle
+        ResumeThread(hThread);
+        CloseHandle(hThread);
+    }
+
+    CloseHandle(hProcess);
+    return 0;
+}
+
+
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+Internal. DLL-инъекции и API-hooking
+
+До этого наша программа Reader работала в режиме External (снаружи) - внешнее чтение памяти. Это означает, что наша программа Reader открывает чужой процесс, затем делает снимок памяти и читает этот снимок. Это удобно, но есть ограничения, 
+например в том, что если мы читаем только "сырую память" и регистры, то мы не знаем когда что-то изменилось, приходится постоянно делать снимки текущей памяти. Также мы не можем легко перехватывать вызовы функций в процессе.
+
+DLL-инъекции решает это так: Мы загружаем свою .dll библиотеку "внутрь Target". Внутри загруженной .dll у нас работает обычный код, который имеет доступ ко всей памяти процесса напрямую (как к своей). В нашем коде мы можем подписаться на события,
+например, на запуск нового потока, вызов API, изменение памяти.
+
+
+###
+Как грузится .dll (быстрый ликбез про загрузчик)
+В каждом процессе есть PEB -> LDR со списком модулей. LoadLibrary(X) в kernel32.dll вызывает внутренний LdrLoadDll (ntdll.dll), который:
+1. мапит образ (IMAGE) в память (секции .text .rdata .data, релокации, импорты),
+2. вызывает "DllMain(..., DLL_PROCESS_ATTACH)".
+
+Никакой магии - DLL - обычный модуль с кодом и данными, просто загруженный в адресное пространство процесса.
+
+
+###
+Способы DLL-инъекции с WinAPI
+1. CreateRemoteThread + LoadLibrary
+- Мы открываем процесс с помощью OpenProcess
+- В его памяти записываем строку "myhack.dll" (путь к нашей .dll)
+- Создаём поток, который вызывает "LoadLibrary("myhack.dll")"
+- В результате наша .dll загружается в адресное пространство Target.
+
+Плюсы: просто, надёжно. Минусы: видно по артефактам (античиты/EDR любят это).
+
+2. QueueUserAPC + LoadLibrary
+- Кладём APC на чужой поток (который должен быть в alertable-ожидании).
+
+Это менее грубо, но требует подходящего состояния потока.
+
+3. RtlCreateUserThread (из ntdll)
+Похож на "CreateRemoteThread", но иногда проходит там, где CRT запрещён.
+
+4. Manual Mapping (Reflective/Manual Injection)
+- Сами копируем секции DLL в процесс, чиним релокации/импорты, зовём наш "DllMain".
+- Не трогаем "LoadLibrary" -> сложнее детектить, но реализации заметно сложнее.
+
+5. SetWindowHookEx (Чаще для GUI-программ)
+- Используется системный хук, который заставляет Windows подгрузить нашу .dll в нужный процесс.
+
+6. AppInit_DLLs, Image File Execution Options (IFEO)
+- Более системные способы (через реестр).
+
+
+###
+Что можно делать внутри DLL
+
+1. Перехватывать API (API hooking)
+Например, заменить "MessageBoxA" так, чтобы оно выводилось другое сообщение. Или логировать все вызовы "WriteFile", чтобы видеть, что программа пишет на диск.
+
+Делается через:
+- Перезапись первых байт функции (jmp на свой код).
+- Таблицу импорта (IAT hooking).
+- Более современные - Microsoft Detours, MinHook.
+
+2. Снимать call stack / регистры прямо внутри процесса
+- Так проще, чем из внешнего процесса.
+- Можно узнать, какая функция сейчас работает и с какими аргументами.
+
+3. Следить за конкретными структурами
+- Например, если программа хранит Player {int HP; int Gold; };, то наша .dll может прямо работать с этими HP и Gold.
+
+4. Впринципе работать с потоками, стеком, модулями на правах "родного кода" процесса.
+
+
+###
+Чем это лучше чем External чтение памяти
+- Нет проблем с правами доступа к чужому процессу, потому что мы уже внутри.
+- Доступ ко всем API, которые использует программа.
+- Можно логировать "события", а не просто статически сканировать память.
+
+Минусы:
+- Более "грязный" метод, может крашить Target.
+- Требует осторожности (любая ошибка падает вместе с процессом).
+- Часто палится античитами (в играх).
+
+
+Вывод: External - это внешний анализатор памяти, Internal - это внутренний мониторинг / перехватчик, где мы видим живые вызовы, а не только дамп. Это превращает "сканер" в "живой монитор".
+
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+Что такое API-hooking и какие бывают хуки
+
+Цель: перехватить функцию так, чтобы наш код исполнился до или вместо оригинала.
+
+1. IAT-hook (Import Address Table)
+- У каждого PE-модуля есть таблица импортов (IAT). Это массив указателей на функции из других DLL.
+- Заменяем в IAT адрес "MessageBoxA" на адрес "MyMessageBoxA".
+- Все вызовы из этого модуля пойдут через нас.
+
+Плюсы: безопасно, работает на любой разрядности, не требует декодировать инструкции.
+Минусы: перехватывает только вызовы через IAT конкретного модуля. Другие модули нужно патчить отдельно.
+
+2. Inline-hook (Trampoline)
+- Патчим первые байты самой целевой функции (например, в "user32!MessageBoxA") на прыжок к нам.
+- Внутри - "трамплин": сохраняем украденные байты, переносим управление обратно.
+
+Плюсы: глобально для всех, кто вызывает эту функцию.
+Минусы: нужно правильно декодировать инструкции (особенно x64, RIP-relative), менять защиты страниц, делать FlushInstructionCache, учитывать CFG, синхронизация потоков, вообщем легче ошибиться.
+
+3. EAT-hook (Export Address Table)
+Меняем фдрес в таблице экспортов у провайдера функции (меньше пригодно в современных условиях, требует перезагрузки импорта/ресолвинга).
+
+4. VEH/Breakpoint-hook
+- Ставим software breakpoint (0xCC) или аппаратный HWBP. На исключение - наш обработчик.
+- Используется для отладки/ремаршалинга, но "шумный" и менее универсальный.
+
+
+###
+В реалиях Windows:
+- ASLR: не забываем что базы модулей рандомны с каждым запуском
+- DEP: нельзя исполнять код на страницах без EXECUTE.
+- CFG / ACG / CIG: контроль целостности и потоков управления (в т.ч. мешает "прыгать куда угодно" и динамически исполнять код из RW-памяти).
+- PPL (Protected Process Light): некоторые процессы (антивирусы и пр.) недоступны для обычного юзера.
+- WOW64: 32-битный процесс в 64-битной системе - особые правила (нужны Wow64 API, инжектор и DLL должны совпадать по битности с таргетом)
+
+
+###
+Как корректно писать код внутри DllMain
+- В "DllMain" (DLL_PROCESS_ATTACH) нельзя: создавать потоки, ловить mutex-ы, грузить другие DLL, делать длительные операции.
+- Правильно: в DLL_PROCESS_ATTACH стартуем "минимум" (например, создаём скрытую "CreateThread" / "_beginthreadex" из "DllMain" запрещено спецификацией, но в реальной жизни обычно делают "очень быстро" и почти все хук-фреймворки так и
+делают; формально - лучше отложить старт через APC или небольшой "bootstrap"), и уже в рабочем потоке ставим хуки, логируем, и т.д.
+
+
+###
+Риски:
+- Любая ошибка в DLL = краш таргета
+- Хуки надо снимать перед выгрузкой (иначе "висячие" патчи).
+
+
+
+
+##################################################
+--------------------------------------------------------------------------
+##################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
