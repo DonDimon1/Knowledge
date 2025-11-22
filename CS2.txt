@@ -1,0 +1,464 @@
+https://github.com/FitoDomik/Creating-cheats
+
+
+Создание читов на C++: базовая теория (для обучения) на примере CS2
+Введение
+Данный материал предназначен исключительно для образовательных целей и направлен на понимание принципов работы программного обеспечения, систем безопасности и взаимодействия с памятью процессов. Использование читов в многопользовательских играх нарушает пользовательское соглашение и может привести к блокировке аккаунта.
+
+Содержание
+Основные понятия
+Архитектура игры CS2
+Базовые техники
+Инъекция кода
+Работа с памятью
+Поиск оффсетов
+Создание простых функций чита
+Обход античит-систем
+Ресурсы для дальнейшего изучения
+Заключение
+Основные понятия
+Что такое чит?
+Чит (от англ. cheat — обман) — программа или скрипт, позволяющие получить преимущество в игре путем изменения игрового процесса способами, не предусмотренными разработчиками.
+
+Основные типы читов в CS2:
+Aimbot — автоматическое наведение на противников
+Wallhack — видение противников через стены
+Triggerbot — автоматический выстрел при наведении на противника
+ESP (Extra Sensory Perception) — отображение дополнительной информации
+Bunny hop — автоматические прыжки для увеличения скорости передвижения
+No recoil/No spread — устранение отдачи и разброса
+Архитектура игры CS2
+CS2 построена на движке Source 2, который является развитием оригинального движка Source. Для понимания создания читов необходимо знать:
+
+Структура памяти процесса
+Процесс CS2 имеет следующие основные сегменты памяти:
+
+Код (.text) — исполняемый код игры
+Данные (.data, .rdata) — статические данные
+Куча (heap) — динамически выделяемая память
+Стек (stack) — временное хранилище для локальных переменных функций
+Ключевые модули CS2
+client.dll — клиентская часть игры, отвечает за рендеринг и пользовательский интерфейс
+engine.dll — игровой движок
+server.dll — серверная часть (в локальных играх)
+materialsystem.dll — система материалов и текстур
+inputsystem.dll — обработка ввода
+Базовые техники
+1. Внешний и внутренний чит
+Внешний чит (External):
+
+Работает как отдельный процесс
+Взаимодействует с игрой через WinAPI
+Более безопасен с точки зрения обнаружения
+Медленнее из-за межпроцессного взаимодействия
+// Пример открытия процесса (внешний чит)
+HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+if (hProcess == NULL) {
+    std::cout << "Не удалось открыть процесс. Ошибка: " << GetLastError() << std::endl;
+    return 1;
+}
+Внутренний чит (Internal):
+
+Внедряется непосредственно в процесс игры
+Имеет прямой доступ к памяти
+Быстрее и эффективнее
+Легче обнаруживается античитами
+// Пример получения адреса функции (внутренний чит)
+HMODULE hModule = GetModuleHandle("client.dll");
+if (hModule == NULL) {
+    std::cout << "Не удалось получить хэндл модуля" << std::endl;
+    return 1;
+}
+2. Перехват функций (хукинг)
+Хукинг позволяет перехватывать вызовы функций игры и изменять их поведение.
+
+Типы хуков:
+
+Inline hook — изменение первых байтов функции для перенаправления на свой код
+IAT hook — модификация таблицы импорта
+VTable hook — изменение таблицы виртуальных функций
+// Пример простого inline-хука
+void* originalFunction = nullptr;
+
+void __stdcall HookedFunction(float* viewAngles) {
+    // Модифицируем углы обзора или выполняем другие действия
+    
+    // Вызываем оригинальную функцию
+    typedef void (__stdcall* OriginalFn)(float*);
+    ((OriginalFn)originalFunction)(viewAngles);
+}
+
+void SetupHook() {
+    // Адрес целевой функции (пример)
+    void* targetFunction = (void*)0x12345678;
+    
+    // Создаем хук
+    MH_CreateHook(targetFunction, &HookedFunction, &originalFunction);
+    MH_EnableHook(targetFunction);
+}
+Инъекция кода
+Для работы внутреннего чита необходимо внедрить код в процесс игры.
+
+Основные методы инъекции:
+1. DLL Injection через LoadLibrary
+// Код инжектора
+BOOL InjectDLL(DWORD processId, const char* dllPath) {
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+    if (hProcess == NULL) return FALSE;
+    
+    // Выделяем память в целевом процессе
+    LPVOID pDllPath = VirtualAllocEx(hProcess, NULL, strlen(dllPath) + 1, 
+                                    MEM_COMMIT, PAGE_READWRITE);
+    if (!pDllPath) {
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+    
+    // Записываем путь к DLL
+    WriteProcessMemory(hProcess, pDllPath, dllPath, strlen(dllPath) + 1, NULL);
+    
+    // Получаем адрес LoadLibraryA
+    LPVOID pLoadLibrary = GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA");
+    
+    // Создаем удаленный поток, вызывающий LoadLibraryA
+    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0, 
+                                      (LPTHREAD_START_ROUTINE)pLoadLibrary, 
+                                      pDllPath, 0, NULL);
+    if (!hThread) {
+        VirtualFreeEx(hProcess, pDllPath, 0, MEM_RELEASE);
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+    
+    // Ждем завершения потока
+    WaitForSingleObject(hThread, INFINITE);
+    
+    // Освобождаем ресурсы
+    VirtualFreeEx(hProcess, pDllPath, 0, MEM_RELEASE);
+    CloseHandle(hThread);
+    CloseHandle(hProcess);
+    
+    return TRUE;
+}
+2. Manual mapping
+Более сложный, но менее обнаружимый метод:
+
+// Упрощенная версия manual mapping (концепция)
+BOOL ManualMap(DWORD processId, const char* dllPath) {
+    // Открываем файл DLL
+    HANDLE hFile = CreateFile(dllPath, GENERIC_READ, FILE_SHARE_READ, NULL, 
+                            OPEN_EXISTING, 0, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+    
+    // Читаем файл DLL
+    DWORD fileSize = GetFileSize(hFile, NULL);
+    BYTE* dllBytes = new BYTE[fileSize];
+    ReadFile(hFile, dllBytes, fileSize, NULL, NULL);
+    CloseHandle(hFile);
+    
+    // Парсим PE-заголовки
+    PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)dllBytes;
+    PIMAGE_NT_HEADERS ntHeader = (PIMAGE_NT_HEADERS)(dllBytes + dosHeader->e_lfanew);
+    
+    // Открываем процесс
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+    if (!hProcess) {
+        delete[] dllBytes;
+        return FALSE;
+    }
+    
+    // Выделяем память в целевом процессе
+    LPVOID baseAddress = VirtualAllocEx(hProcess, NULL, 
+                                      ntHeader->OptionalHeader.SizeOfImage,
+                                      MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!baseAddress) {
+        CloseHandle(hProcess);
+        delete[] dllBytes;
+        return FALSE;
+    }
+    
+    // Копируем секции, разрешаем релокации, импорты и т.д.
+    // [Здесь должен быть код для обработки секций, релокаций, импортов]
+    
+    // Вызываем DllMain
+    HANDLE hThread = CreateRemoteThread(hProcess, NULL, 0,
+                                      (LPTHREAD_START_ROUTINE)((BYTE*)baseAddress + 
+                                      ntHeader->OptionalHeader.AddressOfEntryPoint),
+                                      baseAddress, 0, NULL);
+    
+    // Освобождаем ресурсы
+    delete[] dllBytes;
+    CloseHandle(hThread);
+    CloseHandle(hProcess);
+    
+    return TRUE;
+}
+Работа с памятью
+Чтение и запись памяти
+Для внешнего чита:
+
+// Чтение памяти
+template<typename T>
+T ReadMemory(HANDLE hProcess, DWORD_PTR address) {
+    T value;
+    ReadProcessMemory(hProcess, (LPCVOID)address, &value, sizeof(T), NULL);
+    return value;
+}
+
+// Запись памяти
+template<typename T>
+void WriteMemory(HANDLE hProcess, DWORD_PTR address, T value) {
+    WriteProcessMemory(hProcess, (LPVOID)address, &value, sizeof(T), NULL);
+}
+Для внутреннего чита:
+
+// Чтение памяти
+template<typename T>
+T ReadMemory(DWORD_PTR address) {
+    return *(T*)(address);
+}
+
+// Запись памяти
+template<typename T>
+void WriteMemory(DWORD_PTR address, T value) {
+    *(T*)(address) = value;
+}
+Паттерн-сканирование (сигнатурный поиск)
+Метод поиска адресов функций или структур по характерным байтам:
+
+DWORD_PTR FindPattern(HANDLE hProcess, DWORD_PTR start, DWORD size, const char* pattern, const char* mask) {
+    std::vector<BYTE> buffer(size);
+    ReadProcessMemory(hProcess, (LPCVOID)start, buffer.data(), size, NULL);
+    
+    for (DWORD i = 0; i < size - strlen(mask); i++) {
+        bool found = true;
+        for (DWORD j = 0; j < strlen(mask); j++) {
+            if (mask[j] == 'x' && pattern[j] != buffer[i + j]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) {
+            return start + i;
+        }
+    }
+    return 0;
+}
+
+// Пример использования
+// Сигнатура для поиска функции CreateMove (пример)
+const char* pattern = "\x55\x8B\xEC\x83\xEC\x14\x53\x56\x8B\x75\x08";
+const char* mask = "xxxxxxxxxxx";
+
+DWORD_PTR address = FindPattern(hProcess, moduleBase, moduleSize, pattern, mask);
+Поиск оффсетов
+Оффсеты — это смещения от базовых адресов, по которым находятся нужные данные.
+
+Методы получения оффсетов:
+Дизассемблирование игры с помощью IDA Pro, Ghidra, x64dbg
+Дампинг классов с помощью ReClass.NET
+Сигнатурный поиск (описан выше)
+Использование готовых дампов из открытых источников
+Пример структуры игрока в CS2 (упрощенно):
+class CPlayer {
+public:
+    char pad_0000[0x34]; // 0x0000
+    Vector position; // 0x0034
+    char pad_0040[0x108]; // 0x0040
+    int health; // 0x0148
+    char pad_014C[0x38]; // 0x014C
+    Vector viewAngles; // 0x0184
+    // ... другие поля
+};
+Поиск локального игрока:
+// Пример получения указателя на локального игрока
+DWORD_PTR GetLocalPlayer(HANDLE hProcess, DWORD_PTR clientDll) {
+    // Оффсет указателя на локального игрока (пример)
+    DWORD localPlayerOffset = 0x17E0CB8; // Этот оффсет меняется с обновлениями
+    
+    return ReadMemory<DWORD_PTR>(hProcess, clientDll + localPlayerOffset);
+}
+Создание простых функций чита
+1. Wallhack (Glow ESP)
+Принцип работы: изменение значений в структуре GlowObject для подсветки моделей противников через стены.
+
+void ApplyGlow(HANDLE hProcess, DWORD_PTR clientDll) {
+    // Оффсеты (примерные)
+    DWORD glowObjectManagerOffset = 0x5309A88;
+    DWORD glowIndexOffset = 0x10488;
+    
+    // Получаем указатель на GlowObjectManager
+    DWORD_PTR glowObjectManager = ReadMemory<DWORD_PTR>(hProcess, clientDll + glowObjectManagerOffset);
+    
+    // Получаем список игроков
+    for (int i = 1; i <= 64; i++) {
+        DWORD_PTR entity = GetEntityByIndex(hProcess, clientDll, i);
+        if (!entity) continue;
+        
+        // Проверяем, жив ли игрок
+        int health = ReadMemory<int>(hProcess, entity + 0x148);
+        if (health <= 0) continue;
+        
+        // Проверяем команду
+        int team = ReadMemory<int>(hProcess, entity + 0xF4);
+        
+        // Получаем индекс свечения
+        int glowIndex = ReadMemory<int>(hProcess, entity + glowIndexOffset);
+        
+        // Структура GlowObjectDefinition (упрощенно)
+        struct GlowObjectDefinition {
+            float r, g, b, a;
+            char pad[16];
+            bool renderWhenOccluded;
+            bool renderWhenUnoccluded;
+            bool fullBloom;
+        };
+        
+        // Адрес объекта свечения
+        DWORD_PTR glowObject = glowObjectManager + (glowIndex * sizeof(GlowObjectDefinition));
+        
+        // Устанавливаем цвет в зависимости от команды
+        if (team == 2) { // Террористы
+            WriteMemory<float>(hProcess, glowObject + 0x0, 1.0f); // R
+            WriteMemory<float>(hProcess, glowObject + 0x4, 0.0f); // G
+            WriteMemory<float>(hProcess, glowObject + 0x8, 0.0f); // B
+        } else { // Контр-террористы
+            WriteMemory<float>(hProcess, glowObject + 0x0, 0.0f); // R
+            WriteMemory<float>(hProcess, glowObject + 0x4, 0.0f); // G
+            WriteMemory<float>(hProcess, glowObject + 0x8, 1.0f); // B
+        }
+        WriteMemory<float>(hProcess, glowObject + 0xC, 0.7f); // A
+        
+        // Включаем свечение через стены
+        WriteMemory<bool>(hProcess, glowObject + 0x1C, true); // renderWhenOccluded
+        WriteMemory<bool>(hProcess, glowObject + 0x1D, false); // renderWhenUnoccluded
+    }
+}
+2. Простой Aimbot
+void SimpleAimbot(HANDLE hProcess, DWORD_PTR clientDll, DWORD_PTR engineDll) {
+    // Получаем локального игрока
+    DWORD_PTR localPlayer = GetLocalPlayer(hProcess, clientDll);
+    if (!localPlayer) return;
+    
+    // Проверяем, жив ли игрок
+    int localHealth = ReadMemory<int>(hProcess, localPlayer + 0x148);
+    if (localHealth <= 0) return;
+    
+    // Получаем позицию игрока
+    Vector localPos = ReadMemory<Vector>(hProcess, localPlayer + 0x34);
+    
+    // Получаем текущие углы обзора
+    DWORD_PTR clientState = ReadMemory<DWORD_PTR>(hProcess, engineDll + 0x58CFC4);
+    Vector viewAngles = ReadMemory<Vector>(hProcess, clientState + 0x4D90);
+    
+    float bestFov = 5.0f; // Максимальный угол для захвата цели
+    Vector bestAngle = viewAngles;
+    
+    // Перебираем всех игроков
+    for (int i = 1; i <= 64; i++) {
+        DWORD_PTR entity = GetEntityByIndex(hProcess, clientDll, i);
+        if (!entity || entity == localPlayer) continue;
+        
+        // Проверяем, жив ли игрок
+        int health = ReadMemory<int>(hProcess, entity + 0x148);
+        if (health <= 0) continue;
+        
+        // Проверяем команду (не стреляем по своим)
+        int team = ReadMemory<int>(hProcess, entity + 0xF4);
+        int localTeam = ReadMemory<int>(hProcess, localPlayer + 0xF4);
+        if (team == localTeam) continue;
+        
+        // Получаем позицию головы противника
+        Vector boneMatrix = ReadMemory<Vector>(hProcess, entity + 0x26A8);
+        Vector headPos = GetBonePosition(hProcess, boneMatrix, 8); // 8 - индекс кости головы
+        
+        // Вычисляем направление на голову противника
+        Vector direction = CalculateAngle(localPos, headPos);
+        
+        // Вычисляем FOV (расстояние между текущим углом и углом до цели)
+        float fov = CalculateFov(viewAngles, direction);
+        
+        // Если цель ближе по углу, чем предыдущая лучшая цель
+        if (fov < bestFov) {
+            bestFov = fov;
+            bestAngle = direction;
+        }
+    }
+    
+    // Если нашли подходящую цель, плавно поворачиваем к ней
+    if (bestAngle.x != viewAngles.x || bestAngle.y != viewAngles.y) {
+        // Плавное наведение (линейная интерполяция)
+        Vector smoothedAngle;
+        float smoothFactor = 0.5f; // Чем меньше, тем плавнее
+        
+        smoothedAngle.x = viewAngles.x + (bestAngle.x - viewAngles.x) * smoothFactor;
+        smoothedAngle.y = viewAngles.y + (bestAngle.y - viewAngles.y) * smoothFactor;
+        smoothedAngle.z = 0;
+        
+        // Нормализуем углы
+        NormalizeAngles(smoothedAngle);
+        
+        // Записываем новые углы обзора
+        WriteMemory<Vector>(hProcess, clientState + 0x4D90, smoothedAngle);
+    }
+}
+Обход античит-систем
+CS2 использует Valve Anti-Cheat (VAC), который применяет различные методы обнаружения читов.
+
+Основные методы обнаружения:
+Сигнатурное сканирование — поиск известных читов по сигнатурам
+Поведенческий анализ — выявление нетипичного поведения игрока
+Проверка целостности памяти — обнаружение модификаций игровых файлов
+Обнаружение хуков — поиск перехватов функций
+Скриншоты — периодическая отправка скриншотов на сервер
+Базовые методы обхода (для образовательных целей):
+Минимизация сигнатуры — избегание известных паттернов кода
+Обфускация кода — запутывание кода для усложнения анализа
+Использование драйверов — работа на уровне ядра
+Виртуализация — скрытие реального кода за слоем виртуализации
+Шифрование строк — предотвращение обнаружения по строковым константам
+// Пример простого шифрования строк
+template<int Key, typename CharT>
+constexpr auto XorString(const CharT* str) {
+    std::basic_string<CharT> result;
+    for (size_t i = 0; str[i] != 0; ++i) {
+        result.push_back(str[i] ^ Key);
+    }
+    return result;
+}
+
+// Использование
+auto encryptedString = XorString<0x42>("LoadLibraryA");
+// Расшифровка при использовании
+std::string decryptedString;
+for (char c : encryptedString) {
+    decryptedString.push_back(c ^ 0x42);
+}
+Ресурсы для дальнейшего изучения
+Книги:
+"Game Hacking: Developing Autonomous Bots for Online Games" by Nick Cano
+"Practical Malware Analysis" by Michael Sikorski and Andrew Honig
+"Reversing: Secrets of Reverse Engineering" by Eldad Eilam
+Онлайн-ресурсы:
+Guided Hacking - туториалы и форумы по геймхакингу
+UnKnoWnCheaTs - форум по геймхакингу (только для образовательных целей)
+GitHub - CS2 Dumper - инструмент для дампа структур и оффсетов CS2
+Valve Developer Community - официальная документация по движку Source
+Инструменты:
+IDA Pro/Ghidra - дизассемблеры для анализа кода
+Cheat Engine - инструмент для поиска и модификации значений в памяти
+x64dbg/WinDbg - отладчики для Windows
+ReClass.NET - инструмент для анализа структур в памяти
+HxD - шестнадцатеричный редактор
+Заключение
+Создание читов — это сложный процесс, требующий глубоких знаний в области программирования, реверс-инжиниринга и системного программирования. В этом материале мы рассмотрели базовые концепции и техники, которые используются при разработке читов для CS2.
+
+Важно понимать, что:
+
+Использование читов в многопользовательских играх нарушает правила игры и может привести к блокировке аккаунта.
+Изучение этих техник имеет образовательную ценность для понимания работы программного обеспечения и систем безопасности.
+Навыки, полученные при изучении этих тем, могут быть применены в легальных областях, таких как разработка игр, тестирование на проникновение и анализ безопасности.
+Рекомендуется использовать полученные знания только в образовательных целях или в контролируемой среде, например, в играх с ботами или на локальных серверах, созданных специально для тестирования.
+
+Примечание: Данный материал предоставлен исключительно в образовательных целях. Автор не несет ответственности за неправомерное использование представленной информации.
+
