@@ -1,0 +1,404 @@
+Лучшие кандидаты (решить задачу на C++)
+Легкий
+Базовые алгоритмы, работа с типами данных
+Базовые конструкции языка
+Обработка числовых данных
+Отдел кадров фирмы провел собеседование на вакантную должность и получил для каждого кандидата баллы рейтинга. Выведите кандидатов, которые имеют рейтинг строго выше среднего, согласно их расположению во входных данных. Если такие 
+отсутствуют, выведите «нет».
+Формат ввода
+Две строки, от 1 до 1 000 элементов в каждой.
+Первая строка содержит рейтинги кандидатов (0 ≤ rate ≤ 10) — целые числа, разделенные запятой без пробелов. Вторая строка содержит фамилии кандидатов, разделенные запятой без пробелов. Каждая фамилия — последовательность 
+символов английского и/или русского алфавита длиной от 1 до 40 символов. Гарантируется, что количество имен и рейтингов в двух  строках совпадает.
+Формат вывода
+Фамилии тех кандидатов, рейтинг которых выше среднего, согласно их расположению во входных данных. Фамилия каждого 
+кандидата выводится в отдельной строке. Вывести «нет», если нет кандидатов с рейтингом выше среднего.
+Пример 1
+Входные данные:
+4,6,8,8,5,8,4,7,9,2
+Smith,Johnson,Williams,Brown,Jones, Miller, Davis, Garcia, Rodriguez,Wilson
+Выходные данные:
+Williams
+Brown
+Miller
+Garcia
+Rodriguez
+Пример 2
+Входные данные:
+7,7,7,7,7
+Dupont,Martin,Bernard,Leroy,Петров
+Выходные данные:
+нет
+
+
+##############
+Моё решение: (где-то минут 30-40)
+
+#include <iostream>
+#include <string>
+#include <map>
+#include <cmath>
+
+const std::string numberStr = "4,6,8,8,5,8,4,7,9,2";
+const std::string nameStr = "Smith,Johnson,Williams,Brown,Jones, Miller, Davis, Garcia, Rodriguez,Wilson";
+
+int main() {
+    std::multimap<int, std::string> map;
+    size_t indexNumber = 0, indexName = 0;
+    std::string buf = "";
+
+    while (indexNumber < numberStr.size()) {
+        while (nameStr[indexName] != ',' && indexName < nameStr.size()) {
+            if (nameStr[indexName] == ' ')
+                ++indexName;
+            else
+                buf += nameStr[indexName++];
+        }
+
+        const char* ch = &numberStr[indexNumber];
+        int temp = std::atoi(ch);
+        map.insert(std::make_pair(temp, buf));
+
+        ++indexName;
+        indexNumber += 2;
+        buf = "";
+    }
+
+    double average;
+    for (auto const& [key, val] : map) {
+        average += key;
+    }
+    average /= map.size();
+    average = std::round(average);
+
+    bool found = false;
+    for (auto const& [key, val] : map) {
+            if (key > average) {
+                std::cout << val << "\n";
+                found = true;
+            }
+    }
+
+    if (!found)
+        std::cout << "No";
+}
+
+
+##############
+Решение ChatGPT
+
+#include <iostream>
+#include <vector>
+#include <sstream>
+#include <string>
+
+const std::string numberStr = "4,6,8,8,5,8,4,7,9,2";
+const std::string nameStr = "Smith,Johnson,Williams,Brown,Jones, Miller, Davis, Garcia, Rodriguez,Wilson";
+
+int main() {
+    std::vector<int> ratings;
+    std::vector<std::string> names;
+
+    // Парсим рейтинги
+    std::stringstream ss1(numberStr);
+    std::string num;
+    while (std::getline(ss1, num, ',')) {
+        ratings.push_back(std::stoi(num));
+    }
+
+    // Парсим фамилии
+    std::stringstream ss2(nameStr);
+    std::string name;
+    while (std::getline(ss2, name, ',')) {
+        names.push_back(name);
+    }
+
+    // Считаем среднее
+    double sum = 0;
+    for (int r : ratings) sum += r;
+    double avg = sum / ratings.size();
+
+    // Выводим тех, кто выше среднего
+    bool found = false;
+    for (size_t i = 0; i < ratings.size(); ++i) {
+        if (ratings[i] > avg) {
+            std::cout << names[i] << "\n";
+            found = true;
+        }
+    }
+
+    if (!found)
+        std::cout << "No";
+}
+
+
+
+
+
+
+
+
+
+######################################
+---------------------------------------------------------
+######################################
+
+
+Сотрудник с самой длинной фамилией
+Легкий
+Преобразования, структуры данных, строки
+Обработка строковых данных
+LINQ
+Маркетинговый отдел компании готовит визитные карточки для сотрудников. Для дизайна визитной карточки необходимо 
+знать максимальную длину фамилии и имени сотрудника.
+Вам необходимо разработать модуль, который позволит определить сотрудника, имеющего самую длинную фамилию. 
+Если фамилий с максимальной длиной будет несколько, то выбрать сотрудника с самым длинным именем. Если и длина имени будет 
+одинаковой, то выбрать ту фамилию, которая встретилась первой.
+Формат ввода
+Формат входных данных
+Две строки, от 1 до 1 000 элементов в каждой.
+Первая строка содержит имена сотрудников, разделенные запятой без пробелов.
+Вторая строка содержит фамилии сотрудников, разделенные запятой без пробелов.
+Каждая фамилия и имя — это последовательность латинских или русских букв длиной от 1 до 40 символов.
+Гарантируется корректность данных. Гарантируется, что количество имен и фамилий в двух строках совпадает.
+Формат вывода
+Самые длинные фамилия и имя сотрудника сотрудника в формате:
+Имя;Фамилия
+Пример 1
+Входные данные:
+Иван,Ольга
+Петровский,Сидорова
+Выходные данные:
+Иван;Петровский
+Пример 2
+Входные данные:
+Иван,Петр,Олег
+Иванов,Добровольский,Добровольский
+Выходные данные:
+Петр;Добровольский
+
+
+
+##############
+Моё решение: (12мин 03сек)
+
+#include <iostream>
+#include <vector>
+#include <sstream>
+#include <string>
+
+//const std::string nameStr = "Иван,Ольга";
+//const std::string surnameStr = "Петровский,Сидорова";
+const std::string nameStr = "Иван,Петр,Олег";
+const std::string surnameStr = "Иванов,Добровольский,Добровольский";
+
+int main() {
+    setlocale(LC_CTYPE, "Russian");
+
+    std::vector<std::string> nameVec;
+    std::vector<std::string> surnameVec;
+
+    std::stringstream ss1(nameStr);
+    std::string temp;
+    while (std::getline(ss1, temp, ','))
+        nameVec.push_back(temp);
+
+    std::stringstream ss2(surnameStr);
+    while (std::getline(ss2, temp, ','))
+        surnameVec.push_back(temp);
+
+    size_t maxLen = 0;
+    size_t index = 0;
+    for (size_t i = 0; i < surnameVec.size(); ++i) {
+        if (surnameVec[i].size() > maxLen) {
+            maxLen = surnameVec[i].size();
+            index = i;
+        }
+        else if (surnameVec[i].size() == maxLen) {
+            if (nameVec[i].size() > nameVec[index].size()) {
+                maxLen = surnameVec[i].size();
+                index = i;
+            }
+        }
+    }
+
+    std::cout << nameVec[index] << " " << surnameVec[index];
+}
+
+
+
+
+##############
+Решение ChatGPT (Практически тоже самое)
+
+#include <iostream>
+#include <vector>
+#include <sstream>
+#include <string>
+
+//const std::string nameStr = "Иван,Ольга";
+//const std::string surnameStr = "Петровский,Сидорова";
+const std::string nameStr = "Иван,Петр,Олег";
+const std::string surnameStr = "Иванов,Добровольский,Добровольский";
+
+int main() {
+    setlocale(LC_CTYPE, "Russian");
+
+    std::vector<std::string> nameVec;
+    std::vector<std::string> surnameVec;
+
+    // Парсим имена
+    std::stringstream ss1(nameStr);
+    std::string temp;
+    while (std::getline(ss1, temp, ','))
+        nameVec.push_back(temp);
+
+    // Парсим фамилии
+    std::stringstream ss2(surnameStr);
+    while (std::getline(ss2, temp, ','))
+        surnameVec.push_back(temp);
+
+    size_t n = surnameVec.size();
+    size_t bestIndex = 0;
+
+    for (size_t i = 1; i < n; ++i) {
+        if (surnameVec[i].size() > surnameVec[bestIndex].size()) {
+            bestIndex = i;
+        } else if (surnameVec[i].size() == surnameVec[bestIndex].size()) {
+            if (nameVec[i].size() > nameVec[bestIndex].size()) {
+                bestIndex = i;
+            }
+        }
+    }
+
+    std::cout << nameVec[bestIndex] << " " << surnameVec[bestIndex];
+}
+
+
+
+
+
+
+######################################
+---------------------------------------------------------
+######################################
+
+Каталог кандидатов для отдела кадров
+Легкий
+Объектно-ориентированное программирование
+Объектно-ориентированное программирование — классы и объекты
+Объектно-ориентированное программирование — наследование
+Отдел кадров компании планирует внедрение новой информационной системы для работы с кандидатами на вакантные должности.
+Для информационной системы необходимо разработать модуль, который позволяет сформировать каталог для хранения информации 
+о кандидатах в формате Имя, Отчество, Фамилия, Рейтинг. Вам нужно разработать два класса: Candidate для хранения 
+информации о кандидате и CandidateCatalog для хранения информации о списке кандидатов. Класс CandidateCatalog имеет метод 
+PrintCandidates для вывода списка кандидатов в формате Имя Отчество Фамилия - Рейтинг.
+Формат ввода
+Две строки, от 1 до 1 000 элементов в каждой.
+Первая строка содержит рейтинги кандидатов (0 ≤ rate ≤ 10) — целые числа, разделенные запятой без пробелов.
+Вторая строка содержит поля «имя:отчество:фамилия» кандидатов, разделенные запятой без пробела (каждое поле содержит 
+последовательность символов длиной от 1 до 40). Поля Имя, Отчество, Фамилия могут содержать символы латицицы, кириллицы, 
+пробел, дефис, а также апостроф (’). Гарантируется, что количество имен и рейтингов в двух строках совпадает и у каждого 
+кандидата есть не пустое имя, отчество и фамилия.
+Формат вывода
+Список кандидатов в каталоге в формате Имя Отчество Фамилия - Рейтинг вывести в порядке, заданном во входных данных.
+Каждый кандидат в одной строке.
+Пример 1
+Входные данные:
+5
+Екатерина Варвара:Андреевна:Кузнецова-Полянская
+Выходные данные:
+Екатерина Варвара Андреевна Кузнецова-Полянская - 5
+Пример 2
+Входные данные:
+8,8,8
+Алексей:Михайлович:Смирнов,Дмитрий:Александрович:Козлов,Елена:Владимировна:Новикова
+Выходные данные:
+Алексей Михайлович Смирнов - 8
+Дмитрий Александрович Козлов - 8
+Елена Владимировна Новикова - 8
+
+
+
+##############
+Моё быстрое решение (22 мин 47 сек)
+
+#include <iostream>
+#include <vector>
+#include <sstream>
+#include <string>
+
+//const std::string ratingStr = "5";
+//const std::string initialsStr = "Екатерина Варвара:Андреевна:Кузнецова-Полянская";
+const std::string ratingStr = "8,8,8";
+const std::string initialsStr = "Алексей:Михайлович:Смирнов,Дмитрий:Александрович:Козлов,Елена:Владимировна:Новикова";
+
+class Candidate {
+public:
+    Candidate(std::string& name, std::string& surname, std::string& middleName, std::string& rating):
+        name(name), surname(surname), middleName(middleName), rating(rating) {}
+
+    std::string name;
+    std::string surname;
+    std::string middleName;
+    std::string rating;
+};
+
+class CandidateCatalog {
+public:
+    std::vector<Candidate> CandidateVec;
+
+    void SetCandidate(Candidate& candidate) {
+        CandidateVec.push_back(candidate);
+    }
+    void PrintCandidates() {
+        for (auto& candidate : CandidateVec) {
+            std::cout << candidate.name << " " << candidate.surname << " " << candidate.middleName << " - " << candidate.rating << "\n";
+        }
+    }
+};
+
+int main() {
+    setlocale(LC_CTYPE, "Russian");
+
+    CandidateCatalog cc;
+
+
+    std::vector<std::string> initialsVec;
+    std::stringstream ss1(initialsStr);
+    std::string temp;
+    while (std::getline(ss1, temp, ','))
+        initialsVec.push_back(temp);
+
+    std::vector<std::string> ratingVec;
+    std::stringstream ss2(ratingStr);
+    while (std::getline(ss2, temp, ','))
+        ratingVec.push_back(temp);
+
+
+    for(size_t i = 0; i < initialsVec.size(); ++i) {
+        std::string elem = initialsVec[i];
+        std::stringstream ss3(elem);
+        std::vector<std::string> tempVec;
+
+        while (std::getline(ss3, temp, ':')) {
+            tempVec.push_back(temp);
+        }
+        tempVec.push_back(ratingVec[i]);
+
+        Candidate newCandidate(tempVec[0], tempVec[1], tempVec[2], tempVec[3]);
+        cc.SetCandidate(newCandidate);
+    }
+
+    cc.PrintCandidates();
+}
+
+
+
+
+##############
+Решение ChatGPT 
+
+
+
+
+
