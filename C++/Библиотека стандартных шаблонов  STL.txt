@@ -4958,5 +4958,122 @@ if (v.valueless_by_exception()) {
 
 
 ______________________________________________________________________________________
+std::any
+
+Подробно про std::any смотри в файле "С++ Указатели и ссылки" в разделе "Идеома Type erasure (Стирание типа)"
+
+std::any — это тип из стандартной библиотеки (введён в C++17), который может хранить значение любого типа (копируемого, потому что в std::any объекты только копируются), и при этом знает, какой тип сейчас внутри. 
+Простыми словами: это безопасный и удобный "контейнер для любого значения", аналог void*, но с типобезопасностью на этапе выполнения (runtime).
+
+#include <any>
+#include <iostream>
+#include <string>
+#include <vector>
+
+int main() {
+    std::any a = 42;                    	// хранит int
+    a = 3.14;                           	// теперь double
+    a = std::string("hello");           	// теперь string
+    a = std::vector<int>{1, 2, 3};       	// теперь vector<int>
+
+    // Проверка, что внутри
+    if (a.type() == typeid(int)) {
+        std::cout << "Это int\n";
+    }
+
+    // Извлечение значения
+    try {
+        int i = std::any_cast<int>(a);          // бросит bad_any_cast, если не int
+        std::cout << i << '\n';
+    } catch (const std::bad_any_cast& e) {
+        std::cout << "Не удалось привести к int: " << e.what() << '\n';
+    }
+
+    // Безопасное извлечение (возвращает указатель)
+    if (auto ptr = std::any_cast<std::string>(&a)) {
+        std::cout << "Строка: " << *ptr << '\n';
+    } else {
+        std::cout << "Не строка\n";
+    }
+}
+
+
+###
+Ключевые методы и особенности
+- Создание и присваивание:
+
+std::any a;                         // пустой (empty)
+std::any b = 100;                   // хранит int
+std::any c = std::string("text");   // хранит string
+b = 3.14;                           // меняем тип и значение
+
+- Проверка состояния:
+if (a.has_value()) { ... }          // true, если что-то хранит
+a.type() == typeid(T)               // проверка текущего типа
+
+- Доступ к значению:
+T value = std::any_cast<T>(a);              // бросит bad_any_cast при ошибке
+T value = std::any_cast<T>(std::move(a));   // move-версия (если T move-constructible)
+
+// Безопасно
+const T* ptr = std::any_cast<T>(&a);        // nullptr, если не тот тип
+T* ptr = std::any_cast<T>(&a);              // для модификации
+
+- Очистка:
+a.reset();                          // становится пустым
+a.emplace<T>(args...);              // создаёт значение типа T "на месте"
+
+
+###
+Пример из реальной жизни: простая конфигурация
+
+#include <any>
+#include <unordered_map>
+#include <string>
+#include <iostream>
+
+using Config = std::unordered_map<std::string, std::any>;
+
+Config config = {
+    {"window_width",  1280},
+    {"window_title", std::string("My Game")},
+    {"fullscreen",   false},
+    {"volumes",      std::vector<int>{80, 60, 100}}
+};
+
+template<typename T>
+T get_config(const Config& cfg, const std::string& key, T default_value) {
+    auto it = cfg.find(key);
+    if (it != cfg.end() && it->second.type() == typeid(T)) {
+        return std::any_cast<T>(it->second);
+    }
+    return default_value;
+}
+
+int main() {
+    int width = get_config(config, "window_width", 800);
+    std::string title = get_config(config, "window_title", std::string("Default"));
+    bool fullscreen = get_config(config, "fullscreen", false);
+
+    std::cout << title << " " << width << " fullscreen: " << fullscreen << '\n';
+}
+
+
+###
+Важные ограничения
+- Только копируемые типы: нельзя хранить std::unique_ptr, move-only типы (для этого есть библиотеки вроде Boost.Any).
+- Выделение памяти: внутри обычно small object optimization (SOO), но большие объекты — на куче.
+- Runtime overhead: проверка типа и каст — в runtime.
+
+
+
+
+______________________________________________________________________________________
+
+
+
+
+
+
 
 

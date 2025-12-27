@@ -532,31 +532,155 @@ std::cin >> std::noskipws; - не пропускать пробелы в cin. Это работает на char н
 
 
 
+______________________________________________________________________________________
+std::filesystem (C++17)
+
+std::filesystem — это стандартная библиотека C++17 для работы с файлами, директориями и путями в кросс-платформенном стиле. До C++17 для этого использовали либо платформо-зависимый код (Windows API, POSIX), 
+либо Boost.Filesystem. Теперь всё в std — просто, безопасно и единообразно.
+
+Библиотека живёт в заголовке <filesystem> и в namespace std::filesystem.
+
+Зачем это нужно?
+- Чтение/запись файлов, создание/удаление директорий.
+- Рекурсивный обход папок.
+- Получение информации: размер файла, дата изменения, права доступа.
+- Нормализация и манипуляции с путями (разделение на компоненты, расширение и т.д.).
+
+
+###
+Основные типы и концепции
+- std::filesystem::path — основной класс для представления путей. Работает с строками, автоматически обрабатывает слеши (/ или \ в зависимости от ОС).
+- std::filesystem::directory_entry — элемент в директории (файл или папка).
+- std::filesystem::file_status — информация о типе и правах.
+
+
+###
+Базовые примеры
+
+#include <filesystem>
+#include <iostream>
+
+namespace fs = std::filesystem;  						// удобный алиас
+
+int main() {
+    // 1. Работа с путями
+    fs::path p = "folder/subfolder/file.txt";
+
+    std::cout << "Полный путь: " << p << '\n';
+    std::cout << "Родительская папка: " << p.parent_path() << '\n';           	// folder/subfolder
+    std::cout << "Имя файла: " << p.filename() << '\n';                       	// file.txt
+    std::cout << "Расширение: " << p.extension() << '\n';                     	// .txt
+    std::cout << "Без расширения: " << p.stem() << '\n';                       	// file
+
+    // Конкатенация путей (безопасно)
+    fs::path new_path = p.parent_path() / "new_file.png";
+    std::cout << "Новый путь: " << new_path << '\n';
+
+    // 2. Проверка существования и типа
+    if (fs::exists(p)) {
+        if (fs::is_regular_file(p)) {
+            std::cout << p << " — обычный файл, размер: "
+                      << fs::file_size(p) << " байт\n";
+        } else if (fs::is_directory(p)) {
+            std::cout << p << " — директория\n";
+        }
+    }
+
+    // 3. Информация о файле
+    auto last_write = fs::last_write_time(p);
+    // last_write — file_time_type, можно конвертировать в time_t (C++20 проще)
+}
+
+
+###
+Операции с файловой системой
+
+// Создание директорий
+fs::create_directory("new_folder");
+fs::create_directories("parent/child/grandchild");  			// рекурсивно
+
+// Копирование, перемещение, удаление
+fs::copy("source.txt", "destination.txt");
+fs::copy("source_dir", "dest_dir", fs::copy_options::recursive);  	// рекурсивно
+
+fs::rename("old_name.txt", "new_name.txt");
+fs::remove("file.txt");                    				// удаляет файл
+fs::remove_all("folder");                  				// рекурсивно удаляет всё внутри
+
+// Размер
+uintmax_t size = fs::file_size("big_file.bin");
+
+// Временные файлы
+fs::path temp = fs::temp_directory_path() / "my_temp.txt";
+
+
+###
+Обход директорий (самое полезное в реальной работе)
+
+// Простой обход (не рекурсивный)
+for (const auto& entry : fs::directory_iterator("my_folder")) {
+    std::cout << entry.path() << " — размер: ";
+    if (entry.is_regular_file()) {
+        std::cout << entry.file_size() << " байт\n";
+    } else {
+        std::cout << "<директория>\n";
+    }
+}
+
+// Рекурсивный обход
+for (const auto& entry : fs::recursive_directory_iterator("project")) {
+    std::cout << entry.path() << '\n';
+    
+    // Можно фильтровать
+    if (entry.is_regular_file() && entry.path().extension() == ".cpp") {
+        std::cout << "  <- C++ файл\n";
+    }
+}
+
+
+###
+Обработка ошибок
+
+Большинство функций имеют два варианта:
+- Бросают filesystem_error при проблеме.
+- Версии с суффиксом _error_code принимают std::error_code& и не бросают.
+
+std::error_code ec;
+fs::remove("file.txt", ec);  // не бросит исключение
+if (ec) {
+    std::cout << "Ошибка удаления: " << ec.message() << '\n';
+}
+
+
+###
+Полезные практические примеры
+1) Найти все .txt файлы рекурсивно
+
+void find_txt(const fs::path& root) {
+    for (const auto& entry : fs::recursive_directory_iterator(root)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".txt") {
+            std::cout << entry.path() << '\n';
+        }
+    }
+}
+
+
+2) Вычислить размер директории
+
+uintmax_t dir_size(const fs::path& dir) {
+    uintmax_t total = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(dir)) {
+        if (entry.is_regular_file()) {
+            total += entry.file_size();
+        }
+    }
+    return total;
+}
+
+В реальных проектах она используется постоянно: логгеры, конфиги, сборщики, инсталляторы, парсеры данных — везде, где нужно взаимодействовать с файлами.
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+______________________________________________________________________________________
 
 
